@@ -2,6 +2,34 @@
   const DEFAULT_STATION_ID = "127"; // Times Sq-42 St (Manhattan - 1/2/3 + Complex 611)
   const REFRESH_INTERVAL_MS = 10000;
   const FOCUS_WINDOW_RADIUS = 8; // ±8 stations before & after target station
+  const STORAGE_KEY_STATION = "mta_rip_last_station";
+  const STORAGE_KEY_ROUTE = "mta_rip_last_route";
+
+  function saveStickyStation(stationId, focusRoute = "") {
+    try {
+      if (stationId) {
+        window.localStorage.setItem(STORAGE_KEY_STATION, stationId);
+      }
+      if (focusRoute) {
+        window.localStorage.setItem(STORAGE_KEY_ROUTE, focusRoute);
+      } else {
+        window.localStorage.removeItem(STORAGE_KEY_ROUTE);
+      }
+    } catch (_) {
+      // Ignore localStorage errors in private browsing modes
+    }
+  }
+
+  function loadStickyStation() {
+    try {
+      return {
+        stationId: window.localStorage.getItem(STORAGE_KEY_STATION) || "",
+        focusRoute: window.localStorage.getItem(STORAGE_KEY_ROUTE) || "",
+      };
+    } catch (_) {
+      return { stationId: "", focusRoute: "" };
+    }
+  }
 
   let allStations = [];
   let routeMap = {};
@@ -98,14 +126,25 @@
     const paramRoute = params.get("route");
     const paramView = params.get("view") || params.get("mode");
     const isSnapshot = params.get("snapshot") === "1";
+    const sticky = loadStickyStation();
+
     if (isSnapshot) {
       document.body.classList.add("snapshot-mode");
     }
     if (paramRoute) {
       currentFocusRoute = paramRoute;
+    } else if (!paramStation && !isSnapshot && sticky.focusRoute) {
+      currentFocusRoute = sticky.focusRoute;
     }
     if (paramView === "trackmap") {
       setViewMode("trackmap", false);
+    }
+
+    // If arriving at the root URL without a station parameter, immediately redirect
+    // the URL to the user's last selected station if stored in localStorage.
+    if (!paramStation && !isSnapshot && sticky.stationId) {
+      currentStationId = sticky.stationId;
+      syncUrlParams();
     }
 
     updateClock();
@@ -122,6 +161,16 @@
 
       if (paramStation && allStations.some((s) => s.id === paramStation)) {
         currentStationId = paramStation;
+        if (!isSnapshot) {
+          saveStickyStation(currentStationId, currentFocusRoute);
+        }
+      } else if (
+        !isSnapshot &&
+        sticky.stationId &&
+        allStations.some((s) => s.id === sticky.stationId)
+      ) {
+        currentStationId = sticky.stationId;
+        syncUrlParams();
       } else {
         currentStationId = defaultId;
       }
@@ -163,10 +212,10 @@
 
   function syncUrlParams() {
     const url = new URL(window.location.href);
-    if (currentStationId === DEFAULT_STATION_ID) {
-      url.searchParams.delete("station");
-    } else {
+    if (currentStationId) {
       url.searchParams.set("station", currentStationId);
+    } else {
+      url.searchParams.delete("station");
     }
     if (currentFocusRoute) {
       url.searchParams.set("route", currentFocusRoute);
@@ -249,6 +298,7 @@
   async function selectStation(stationId, focusRoute = "") {
     currentStationId = stationId;
     currentFocusRoute = focusRoute || "";
+    saveStickyStation(currentStationId, currentFocusRoute);
     syncUrlParams();
     await loadStationBoard(stationId);
   }
@@ -386,17 +436,14 @@
     }
     const a = document.createElement("a");
     const params = new URLSearchParams();
-    if (resolvedId !== DEFAULT_STATION_ID) {
-      params.set("station", resolvedId);
-    }
+    params.set("station", resolvedId);
     if (routeId) {
       params.set("route", routeId);
     }
     if (currentView === "trackmap") {
       params.set("view", "trackmap");
     }
-    const qs = params.toString();
-    a.href = qs ? `?${qs}` : "/";
+    a.href = `?${params.toString()}`;
     a.className = className;
     a.textContent = stopName;
     a.title = `Jump to ${stopName} station`;
