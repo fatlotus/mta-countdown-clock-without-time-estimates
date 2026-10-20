@@ -64,5 +64,7 @@ Then open `http://localhost:8080` in your browser.
 gcloud run deploy mta-countdown \
   --source . \
   --region=us-central1 \
+  --max-instances=1 \
+  --min-instances=0 \
   --allow-unauthenticated
 ```
