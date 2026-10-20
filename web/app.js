@@ -284,7 +284,7 @@
     const transferLinks = board.transfer_links || [];
     const activeLink = transferLinks.find((tl) => tl.is_active);
     const activeLineName = (activeLink && activeLink.line_name) || st.line;
-    document.title = `MTA Subway Live Location Board — ${st.name} (${activeRoutes.join("/")})`;
+    document.title = `MTA.rip — ${st.name} (${activeRoutes.join("/")}) — Unofficial NYC Subway Live Location Board`;
 
     stationNameEl.textContent = st.name;
     stationLineEl.textContent = `${activeLineName} Line (${activeRoutes.join(" · ")})`;
@@ -346,18 +346,114 @@
       northDirHeadingEl,
       northCountBadgeEl,
       northTrainsEl,
-      st.name
+      st
     );
     renderDirectionPanel(
       board.southbound,
       southDirHeadingEl,
       southCountBadgeEl,
       southTrainsEl,
-      st.name
+      st
     );
   }
 
-  function renderDirectionPanel(dirBoard, headingEl, countBadgeEl, containerEl, targetStationName) {
+  function resolveStationId(stopId, stopName, routeId) {
+    if (stopId && allStations.some((s) => s.id === stopId)) {
+      return stopId;
+    }
+    if (!stopName || stopName === "...") {
+      return "";
+    }
+    if (routeId) {
+      const byRoute = allStations.find(
+        (s) => s.name === stopName && Array.isArray(s.routes) && s.routes.includes(routeId)
+      );
+      if (byRoute) return byRoute.id;
+    }
+    const byName = allStations.find((s) => s.name === stopName);
+    return byName ? byName.id : "";
+  }
+
+  function createStationLink(stopName, stopId, routeId, className = "board-station-link") {
+    const resolvedId = resolveStationId(stopId, stopName, routeId);
+    if (!resolvedId) {
+      const span = document.createElement("span");
+      if (className && className !== "board-station-link") {
+        span.className = className;
+      }
+      span.textContent = stopName;
+      return span;
+    }
+    const a = document.createElement("a");
+    const params = new URLSearchParams();
+    if (resolvedId !== DEFAULT_STATION_ID) {
+      params.set("station", resolvedId);
+    }
+    if (routeId) {
+      params.set("route", routeId);
+    }
+    if (currentView === "trackmap") {
+      params.set("view", "trackmap");
+    }
+    const qs = params.toString();
+    a.href = qs ? `?${qs}` : "/";
+    a.className = className;
+    a.textContent = stopName;
+    a.title = `Jump to ${stopName} station`;
+    a.addEventListener("click", (e) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+        return;
+      }
+      e.preventDefault();
+      selectStation(resolvedId, routeId);
+    });
+    return a;
+  }
+
+  function buildLocationStatusNode(tr, targetStation) {
+    const statusText = document.createElement("span");
+    const targetName = (targetStation && targetStation.name) || "";
+    const targetId = (targetStation && targetStation.id) || "";
+    const currName = tr.current_stop || targetName;
+    const currId = tr.current_stop_id || targetId;
+
+    if (tr.status_type === "BETWEEN" && tr.previous_stop && currName) {
+      statusText.appendChild(document.createTextNode("Between "));
+      statusText.appendChild(
+        createStationLink(tr.previous_stop, tr.previous_stop_id, tr.route_id)
+      );
+      statusText.appendChild(document.createTextNode(" & "));
+      statusText.appendChild(createStationLink(currName, currId, tr.route_id));
+      return statusText;
+    }
+
+    if (tr.status_type === "AT_TARGET" && (targetName || currName)) {
+      const stName = targetName || currName;
+      const stId = targetId || currId;
+      statusText.appendChild(document.createTextNode("At "));
+      statusText.appendChild(createStationLink(stName, stId, tr.route_id));
+      statusText.appendChild(document.createTextNode(" (Boarding in Station)"));
+      return statusText;
+    }
+
+    if (tr.status_type === "APPROACHING" && currName) {
+      statusText.appendChild(document.createTextNode("Approaching "));
+      statusText.appendChild(createStationLink(currName, currId, tr.route_id));
+      return statusText;
+    }
+
+    if (tr.status_type === "AT_STATION" && currName) {
+      statusText.appendChild(document.createTextNode("At "));
+      statusText.appendChild(createStationLink(currName, currId, tr.route_id));
+      return statusText;
+    }
+
+    statusText.textContent = tr.location_status;
+    return statusText;
+  }
+
+  function renderDirectionPanel(dirBoard, headingEl, countBadgeEl, containerEl, targetStation) {
+    const targetStationName = (targetStation && targetStation.name) || "";
     headingEl.textContent = dirBoard.label || "Terminal";
     const trains = dirBoard.trains || [];
     countBadgeEl.textContent =
@@ -403,7 +499,9 @@
 
       const destName = document.createElement("div");
       destName.className = "train-dest-name";
-      destName.textContent = tr.destination;
+      destName.appendChild(
+        createStationLink(tr.destination, tr.destination_stop_id, tr.route_id)
+      );
       destName.title = tr.destination;
 
       const tripSub = document.createElement("div");
@@ -424,8 +522,7 @@
       const dot = document.createElement("span");
       dot.className = `status-indicator-dot ${tr.status_type || ""}`.trim();
 
-      const statusText = document.createElement("span");
-      statusText.textContent = tr.location_status;
+      const statusText = buildLocationStatusNode(tr, targetStation);
 
       statusBanner.appendChild(dot);
       statusBanner.appendChild(statusText);
@@ -442,12 +539,22 @@
             arrow.textContent = "→";
             strip.appendChild(arrow);
           }
-          const node = document.createElement("span");
           const isCurrent = idx === 0;
           const isTarget = idx === tr.recent_path.length - 1 && stopName === targetStationName;
-          node.className = `strip-node ${isCurrent ? "current" : ""} ${isTarget ? "target" : ""}`.trim();
-          node.textContent = stopName;
-          strip.appendChild(node);
+          const nodeClass = `strip-node ${isCurrent ? "current" : ""} ${isTarget ? "target" : ""}`.trim();
+          const stopId =
+            Array.isArray(tr.recent_stop_ids) && tr.recent_stop_ids[idx]
+              ? tr.recent_stop_ids[idx]
+              : "";
+          if (stopName === "...") {
+            const node = document.createElement("span");
+            node.className = nodeClass;
+            node.textContent = stopName;
+            strip.appendChild(node);
+          } else {
+            const node = createStationLink(stopName, stopId, tr.route_id, nodeClass);
+            strip.appendChild(node);
+          }
         });
 
         locCell.appendChild(strip);

@@ -460,15 +460,20 @@ func (s *Service) resolveTrainArrival(
 	routeID := tu.GetTrip().GetRouteId()
 	rInfo := s.getRouteInfo(routeID)
 
-	// Find previous stop name from STUs, VehiclePosition, or canonical stop sequence
+	// Find previous stop ID and name from STUs, VehiclePosition, or canonical stop sequence
+	prevStopID := ""
 	prevStopName := ""
 	if currIdx > 0 {
 		prevID := CleanStopID(stus[currIdx-1].GetStopId())
-		prevStopName = s.stopNames[prevID]
+		if s.stopNames[prevID] != "" {
+			prevStopID = prevID
+			prevStopName = s.stopNames[prevID]
+		}
 	}
 	if prevStopName == "" && veh != nil {
 		vpStopID := CleanStopID(veh.GetStopId())
-		if vpStopID != "" && vpStopID != currStopID {
+		if vpStopID != "" && vpStopID != currStopID && s.stopNames[vpStopID] != "" {
+			prevStopID = vpStopID
 			prevStopName = s.stopNames[vpStopID]
 		}
 	}
@@ -476,7 +481,8 @@ func (s *Service) resolveTrainArrival(
 		seq := s.static.CanonicalSequences[routeID+"_"+dir]
 		for idx, sid := range seq {
 			if sid == currStopID && idx > 0 {
-				prevStopName = s.stopNames[seq[idx-1]]
+				prevStopID = seq[idx-1]
+				prevStopName = s.stopNames[prevStopID]
 				break
 			}
 		}
@@ -542,37 +548,44 @@ func (s *Service) resolveTrainArrival(
 
 	// Build a recent path snippet (from current stop up to target station, max 6 stops) for UI strip diagram
 	var recentPath []string
+	var recentStopIDs []string
 	startIdx := currIdx
 	if targetIdx-startIdx > 4 {
 		startIdx = targetIdx - 4
 	}
 	if currIdx < startIdx {
 		recentPath = append(recentPath, currStopName, "...")
+		recentStopIDs = append(recentStopIDs, currStopID, "")
 	}
 	for k := startIdx; k <= targetIdx; k++ {
-		sname := s.stopNames[CleanStopID(stus[k].GetStopId())]
+		sid := CleanStopID(stus[k].GetStopId())
+		sname := s.stopNames[sid]
 		if sname != "" {
 			recentPath = append(recentPath, sname)
+			recentStopIDs = append(recentStopIDs, sid)
 		}
 	}
 
 	return TrainArrival{
-		TripID:         tu.GetTrip().GetTripId(),
-		RouteID:        routeID,
-		RouteShortName: rInfo.ShortName,
-		RouteColor:     rInfo.Color,
-		RouteTextColor: rInfo.TextColor,
-		Direction:      dir,
-		Destination:    destName,
-		LocationStatus: locationStatus,
-		StatusType:     statusType,
-		CurrentStopID:  currStopID,
-		CurrentStop:    currStopName,
-		PreviousStop:   prevStopName,
-		StopsAway:      stopsAway,
-		StopsAwayLabel: stopsAwayLabel,
-		RecentPath:     recentPath,
-		SortOrder:      targetTime,
+		TripID:            tu.GetTrip().GetTripId(),
+		RouteID:           routeID,
+		RouteShortName:    rInfo.ShortName,
+		RouteColor:        rInfo.Color,
+		RouteTextColor:    rInfo.TextColor,
+		Direction:         dir,
+		Destination:       destName,
+		DestinationStopID: termStopID,
+		LocationStatus:    locationStatus,
+		StatusType:        statusType,
+		CurrentStopID:     currStopID,
+		CurrentStop:       currStopName,
+		PreviousStopID:    prevStopID,
+		PreviousStop:      prevStopName,
+		StopsAway:         stopsAway,
+		StopsAwayLabel:    stopsAwayLabel,
+		RecentPath:        recentPath,
+		RecentStopIDs:     recentStopIDs,
+		SortOrder:         targetTime,
 	}, true
 }
 
@@ -639,11 +652,14 @@ func (s *Service) populateSimulatedTrains(resp *StationBoardResponse) {
 
 			currStopID := seq[currIdx]
 			currStopName := s.stopNames[currStopID]
+			prevStopID := ""
 			prevStopName := ""
 			if currIdx > 0 {
-				prevStopName = s.stopNames[seq[currIdx-1]]
+				prevStopID = seq[currIdx-1]
+				prevStopName = s.stopNames[prevStopID]
 			}
-			destName := s.stopNames[seq[len(seq)-1]]
+			destStopID := seq[len(seq)-1]
+			destName := s.stopNames[destStopID]
 
 			rng := rand.New(rand.NewSource(timeBucket + int64(i*31) + int64(dir[0])))
 			phase := rng.Intn(3)
@@ -678,33 +694,39 @@ func (s *Service) populateSimulatedTrains(resp *StationBoardResponse) {
 			}
 
 			var recentPath []string
+			var recentStopIDs []string
 			startIdx := currIdx
 			if targetIdx-startIdx > 4 {
 				startIdx = targetIdx - 4
 			}
 			if currIdx < startIdx {
 				recentPath = append(recentPath, currStopName, "...")
+				recentStopIDs = append(recentStopIDs, currStopID, "")
 			}
 			for k := startIdx; k <= targetIdx; k++ {
 				recentPath = append(recentPath, s.stopNames[seq[k]])
+				recentStopIDs = append(recentStopIDs, seq[k])
 			}
 
 			arrivals = append(arrivals, TrainArrival{
-				TripID:         fmt.Sprintf("SIM_%s_%s_%d", routeID, dir, i),
-				RouteID:        routeID,
-				RouteShortName: rInfo.ShortName,
-				RouteColor:     rInfo.Color,
-				RouteTextColor: rInfo.TextColor,
-				Direction:      dir,
-				Destination:    destName,
-				LocationStatus: locationStatus,
-				StatusType:     statusType,
-				CurrentStopID:  currStopID,
-				CurrentStop:    currStopName,
-				PreviousStop:   prevStopName,
-				StopsAway:      stopsAway,
-				StopsAwayLabel: stopsAwayLabel,
-				RecentPath:     recentPath,
+				TripID:            fmt.Sprintf("SIM_%s_%s_%d", routeID, dir, i),
+				RouteID:           routeID,
+				RouteShortName:    rInfo.ShortName,
+				RouteColor:        rInfo.Color,
+				RouteTextColor:    rInfo.TextColor,
+				Direction:         dir,
+				Destination:       destName,
+				DestinationStopID: destStopID,
+				LocationStatus:    locationStatus,
+				StatusType:        statusType,
+				CurrentStopID:     currStopID,
+				CurrentStop:       currStopName,
+				PreviousStopID:    prevStopID,
+				PreviousStop:      prevStopName,
+				StopsAway:         stopsAway,
+				StopsAwayLabel:    stopsAwayLabel,
+				RecentPath:        recentPath,
+				RecentStopIDs:     recentStopIDs,
 			})
 		}
 		return arrivals

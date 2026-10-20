@@ -45,22 +45,25 @@ type TransferLink struct {
 // TrainArrival represents an upcoming train for a station board, replacing time-based arrival
 // countdowns with the train's live physical position along the line.
 type TrainArrival struct {
-	TripID         string   `json:"trip_id"`
-	RouteID        string   `json:"route_id"`
-	RouteShortName string   `json:"route_short_name"`
-	RouteColor     string   `json:"route_color"`
-	RouteTextColor string   `json:"route_text_color"`
-	Direction      string   `json:"direction"`       // "N" or "S"
-	Destination    string   `json:"destination"`     // Terminal station name (e.g., "Inwood-207 St")
-	LocationStatus string   `json:"location_status"` // e.g., "At Jay St-MetroTech", "Between Chambers St & Fulton St"
-	StatusType     string   `json:"status_type"`     // "AT_STATION", "APPROACHING", "BETWEEN", "AT_TARGET"
-	CurrentStopID  string   `json:"current_stop_id"`
-	CurrentStop    string   `json:"current_stop"`
-	PreviousStop   string   `json:"previous_stop,omitempty"`
-	StopsAway      int      `json:"stops_away"`
-	StopsAwayLabel string   `json:"stops_away_label"` // e.g., "In Station", "1 stop away", "4 stops away"
-	RecentPath     []string `json:"recent_path"`      // Sequence of stops leading to the target station for strip map visualization
-	SortOrder      int64    `json:"-"`
+	TripID            string   `json:"trip_id"`
+	RouteID           string   `json:"route_id"`
+	RouteShortName    string   `json:"route_short_name"`
+	RouteColor        string   `json:"route_color"`
+	RouteTextColor    string   `json:"route_text_color"`
+	Direction         string   `json:"direction"`       // "N" or "S"
+	Destination       string   `json:"destination"`     // Terminal station name (e.g., "Inwood-207 St")
+	DestinationStopID string   `json:"destination_stop_id,omitempty"`
+	LocationStatus    string   `json:"location_status"` // e.g., "At Jay St-MetroTech", "Between Chambers St & Fulton St"
+	StatusType        string   `json:"status_type"`     // "AT_STATION", "APPROACHING", "BETWEEN", "AT_TARGET"
+	CurrentStopID     string   `json:"current_stop_id"`
+	CurrentStop       string   `json:"current_stop"`
+	PreviousStopID    string   `json:"previous_stop_id,omitempty"`
+	PreviousStop      string   `json:"previous_stop,omitempty"`
+	StopsAway         int      `json:"stops_away"`
+	StopsAwayLabel    string   `json:"stops_away_label"` // e.g., "In Station", "1 stop away", "4 stops away"
+	RecentPath        []string `json:"recent_path"`      // Sequence of stops leading to the target station for strip map visualization
+	RecentStopIDs     []string `json:"recent_stop_ids,omitempty"`
+	SortOrder         int64    `json:"-"`
 }
 
 // DirectionBoard holds the arrivals and metadata for one direction (Northbound or Southbound) at a station.
