@@ -1,0 +1,8 @@
+# Compiled binaries
+mta-countdown
+*.exe
+*.out
+
+# OS / Editor artifacts
+.DS_Store
+*.swp
