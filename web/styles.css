@@ -1,0 +1,1639 @@
+:root,
+[data-theme="dark"] {
+  --bg-page: #07090d;
+  --bg-panel: #10141d;
+  --bg-panel-elevated: #171d29;
+  --bg-row: #141923;
+  --bg-row-hover: #1c2433;
+  --bg-vignelli: #0b0d12;
+  --text-primary: #f5f7fa;
+  --text-secondary: #9ba5b7;
+  --text-muted: #647087;
+  --border-color: #242d3f;
+  --border-strong: #334059;
+  --vignelli-stripe: #ffffff;
+  --accent-blue: #0062cf;
+  --accent-amber: #f6bc26;
+  --accent-green: #00b865;
+  --badge-bg: #1f2737;
+  --shadow-lg: 0 20px 45px rgba(0, 0, 0, 0.55);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg-page: #dfe4ec;
+    --bg-panel: #ffffff;
+    --bg-panel-elevated: #f3f6fa;
+    --bg-row: #f8fafd;
+    --bg-row-hover: #edf2f9;
+    --bg-vignelli: #111318;
+    --text-primary: #0f141e;
+    --text-secondary: #424f66;
+    --text-muted: #6c7a93;
+    --border-color: #d4dce8;
+    --border-strong: #b6c3d6;
+    --vignelli-stripe: #ffffff;
+    --accent-blue: #0052b0;
+    --accent-amber: #d98200;
+    --accent-green: #008748;
+    --badge-bg: #e7edf6;
+    --shadow-lg: 0 14px 34px rgba(15, 23, 42, 0.12);
+  }
+}
+
+[data-theme="light"] {
+  --bg-page: #dfe4ec;
+  --bg-panel: #ffffff;
+  --bg-panel-elevated: #f3f6fa;
+  --bg-row: #f8fafd;
+  --bg-row-hover: #edf2f9;
+  --bg-vignelli: #111318;
+  --text-primary: #0f141e;
+  --text-secondary: #424f66;
+  --text-muted: #6c7a93;
+  --border-color: #d4dce8;
+  --border-strong: #b6c3d6;
+  --vignelli-stripe: #ffffff;
+  --accent-blue: #0052b0;
+  --accent-amber: #d98200;
+  --accent-green: #008748;
+  --badge-bg: #e7edf6;
+  --shadow-lg: 0 14px 34px rgba(15, 23, 42, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+body.snapshot-mode *,
+body.snapshot-mode *::before,
+body.snapshot-mode *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
+body {
+  background-color: var(--bg-page);
+  color: var(--text-primary);
+  font-family: "Helvetica Neue", Helvetica, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  line-height: 1.4;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app-shell {
+  max-width: 1520px;
+  margin: 0 auto;
+  padding: 16px 20px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Top Control Bar */
+.control-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px 18px;
+  box-shadow: var(--shadow-lg);
+  flex-wrap: wrap;
+}
+
+.brand-cluster {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mta-logo-pill {
+  background: #0039a6;
+  color: #ffffff;
+  font-weight: 900;
+  font-size: 0.95rem;
+  letter-spacing: -0.03em;
+  padding: 6px 10px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.brand-titles {
+  display: flex;
+  flex-direction: column;
+}
+
+.brand-kicker {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.brand-subtitle {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* Search & Station Picker */
+.station-picker-wrapper {
+  position: relative;
+  flex: 1 1 380px;
+  max-width: 580px;
+}
+
+.search-input-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-icon {
+  position: absolute;
+  left: 12px;
+  width: 17px;
+  height: 17px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+#station-search {
+  width: 100%;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 9px 38px 9px 38px;
+  font-size: 0.92rem;
+  font-weight: 500;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+#station-search:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px rgba(0, 98, 207, 0.25);
+}
+
+.shortcut-hint {
+  position: absolute;
+  right: 10px;
+  background: var(--badge-bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.75rem;
+  font-family: monospace;
+  pointer-events: none;
+}
+
+.station-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.65);
+  z-index: 100;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 440px;
+}
+
+.station-dropdown.hidden {
+  display: none;
+}
+
+.borough-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--bg-panel-elevated);
+  border-bottom: 1px solid var(--border-color);
+  overflow-x: auto;
+}
+
+.borough-tab {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.borough-tab:hover {
+  color: var(--text-primary);
+  background: var(--badge-bg);
+}
+
+.borough-tab.active {
+  background: var(--accent-blue);
+  color: #ffffff;
+}
+
+.station-list {
+  overflow-y: auto;
+  max-height: 380px;
+  divide-y: 1px solid var(--border-color);
+}
+
+.station-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: background 0.1s ease;
+  gap: 10px;
+}
+
+.station-option:hover,
+.station-option.selected {
+  background: var(--bg-row-hover);
+}
+
+.station-option-left {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.station-option-name {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.station-option-sub {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.station-option-bullets {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Toolbar Buttons */
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.action-btn {
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 7px 11px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.action-btn:hover {
+  background: var(--bg-row-hover);
+  border-color: var(--accent-blue);
+}
+
+.segmented-control {
+  display: inline-flex;
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 2px;
+  flex-shrink: 0;
+}
+
+.seg-btn {
+  background: transparent;
+  color: var(--text-secondary);
+  border: none;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.seg-btn.active {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  flex-shrink: 0;
+}
+
+.pulse-dot.simulated {
+  background: var(--accent-amber);
+}
+
+/* MTA Vignelli Sign Header */
+.lcd-monitor {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.vignelli-sign {
+  background: var(--bg-vignelli);
+  color: #ffffff;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 2px solid #262c3a;
+  box-shadow: var(--shadow-lg);
+}
+
+.vignelli-stripe {
+  height: 5px;
+  background: #ffffff;
+  margin-top: 12px;
+  width: 100%;
+}
+
+.vignelli-content {
+  padding: 16px 24px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.station-primary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.station-title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.station-name {
+  font-size: 2.35rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.08;
+  color: #ffffff;
+}
+
+.station-bullets {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Authentic Circular MTA Route Bullets */
+.route-bullet {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-weight: 800;
+  font-size: 1.12rem;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  user-select: none;
+  flex-shrink: 0;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.35);
+}
+
+.route-bullet.sm {
+  width: 24px;
+  height: 24px;
+  font-size: 0.8rem;
+}
+
+.route-bullet.lg {
+  width: 42px;
+  height: 42px;
+  font-size: 1.38rem;
+}
+
+/* Recessed Architectural Corridor Switcher Bays in Vignelli Header */
+.corridor-switcher-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px 5px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  color: #e2e8f0;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
+.corridor-switcher-pill:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.5);
+  opacity: 1;
+}
+
+.corridor-switcher-pill.active {
+  background: rgba(255, 255, 255, 0.13);
+  border-color: rgba(255, 255, 255, 0.88);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 2px 8px rgba(0, 0, 0, 0.35);
+  opacity: 1;
+}
+
+.corridor-switcher-pill.inactive {
+  opacity: 0.78;
+}
+
+.corridor-pill-bullets {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.corridor-pill-label {
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #cbd5e1;
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
+  padding-left: 7px;
+  white-space: nowrap;
+}
+
+.corridor-switcher-pill.active .corridor-pill-label {
+  color: #ffffff;
+  border-left-color: rgba(255, 255, 255, 0.32);
+}
+
+/* Recessed Architectural Transfer Links on Track Map Station Box */
+.station-other-links-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  width: 100%;
+}
+
+[data-theme="light"] .station-other-links-row {
+  border-top-color: rgba(15, 23, 42, 0.08);
+}
+
+.station-other-label {
+  font-size: 0.61rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-right: 2px;
+  white-space: nowrap;
+}
+
+.station-transfer-chip {
+  --chip-route-color: #64748b;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 6px 1px 7px;
+  border-radius: 3px;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-left: 3.5px solid var(--chip-route-color);
+  cursor: pointer;
+  line-height: 1.3;
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
+}
+
+.station-transfer-chip:hover {
+  background: var(--bg-row-hover);
+  border-color: var(--text-secondary);
+  border-left-color: var(--chip-route-color);
+  transform: translateY(-1px);
+}
+
+.station-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: #b5bfd1;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.station-meta-pill {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  padding: 2px 9px;
+  border-radius: 4px;
+  font-weight: 700;
+}
+
+.station-id-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8rem;
+  color: #8f9bb3;
+}
+
+.lcd-clock-cluster {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.lcd-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 1.85rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  color: #ffffff;
+}
+
+.lcd-feed-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.feed-badge {
+  background: rgba(0, 184, 101, 0.18);
+  color: #3fe090;
+  border: 1px solid rgba(63, 224, 144, 0.4);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.feed-badge.simulated {
+  background: rgba(246, 188, 38, 0.18);
+  color: #f6bc26;
+  border-color: rgba(246, 188, 38, 0.45);
+}
+
+.updated-sub {
+  font-size: 0.76rem;
+  color: #9ba5b7;
+  white-space: nowrap;
+}
+
+/* Dual Direction Boards */
+.direction-boards-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+@media (max-width: 1080px) {
+  .direction-boards-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.direction-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.direction-header {
+  background: var(--bg-panel-elevated);
+  padding: 14px 18px;
+  border-bottom: 2px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dir-title-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dir-arrow {
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  background: var(--badge-bg);
+  border: 1px solid var(--border-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  font-weight: 900;
+  color: var(--text-primary);
+}
+
+.dir-kicker {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  color: var(--text-muted);
+}
+
+.dir-label {
+  font-size: 1.22rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.train-count-pill {
+  background: var(--badge-bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.board-column-headers {
+  display: grid;
+  grid-template-columns: minmax(195px, 1.25fr) minmax(240px, 2fr) 124px;
+  gap: 12px;
+  padding: 8px 18px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+}
+
+.col-distance {
+  text-align: right;
+}
+
+.train-rows-container {
+  display: flex;
+  flex-direction: column;
+  divide-y: 1px solid var(--border-color);
+  min-height: 220px;
+}
+
+/* Individual Train LCD Row */
+.train-row {
+  display: grid;
+  grid-template-columns: minmax(195px, 1.25fr) minmax(240px, 2fr) 124px;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 18px;
+  background: var(--bg-row);
+  border-bottom: 1px solid var(--border-color);
+  transition: background 0.15s ease;
+}
+
+.train-row:hover {
+  background: var(--bg-row-hover);
+}
+
+.train-row.in-station {
+  background: rgba(0, 184, 101, 0.09);
+  border-left: 4px solid var(--accent-green);
+}
+
+.train-row.approaching-target {
+  background: rgba(246, 188, 38, 0.08);
+  border-left: 4px solid var(--accent-amber);
+}
+
+.train-route-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.train-dest-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.train-dest-name {
+  font-size: 1.04rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.train-trip-sub {
+  font-size: 0.73rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* Location Cell (Replaces Time Countdown) */
+.train-location-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.location-status-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.02rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.status-indicator-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--accent-blue);
+}
+
+.status-indicator-dot.AT_TARGET {
+  background: var(--accent-green);
+  box-shadow: 0 0 10px var(--accent-green);
+  animation: blinkFast 1s infinite;
+}
+
+.status-indicator-dot.APPROACHING {
+  background: var(--accent-amber);
+  box-shadow: 0 0 8px var(--accent-amber);
+  animation: blinkFast 1.4s infinite;
+}
+
+.status-indicator-dot.BETWEEN {
+  background: #38bdf8;
+}
+
+.status-indicator-dot.AT_STATION {
+  background: #a855f7;
+}
+
+@keyframes blinkFast {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.85); }
+}
+
+/* Mini Stop Progression Strip */
+.stop-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+
+.strip-node {
+  background: var(--badge-bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.strip-node.current {
+  background: rgba(56, 189, 248, 0.18);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  font-weight: 700;
+}
+
+.strip-node.target {
+  background: rgba(0, 184, 101, 0.18);
+  color: #3fe090;
+  border: 1px solid rgba(63, 224, 144, 0.35);
+  font-weight: 700;
+}
+
+[data-theme="light"] .strip-node.current {
+  color: #0284c7;
+}
+
+[data-theme="light"] .strip-node.target {
+  color: #008748;
+}
+
+.strip-arrow {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+/* Stops Away Pill (Right Column) */
+.train-distance-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+}
+
+.stops-away-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--badge-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  font-size: 0.88rem;
+  font-weight: 800;
+  padding: 5px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.stops-away-badge.now {
+  background: var(--accent-green);
+  color: #ffffff;
+  border-color: transparent;
+}
+
+.stops-away-badge.next {
+  background: var(--accent-amber);
+  color: #0f141e;
+  border-color: transparent;
+}
+
+.status-tag-micro {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+/* Empty State */
+.empty-board-state {
+  padding: 36px 24px;
+  text-align: center;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.empty-title {
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.empty-note {
+  font-size: 0.83rem;
+  max-width: 440px;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 680px) {
+  .app-shell {
+    padding: 10px 10px 24px;
+    gap: 12px;
+  }
+
+  .control-bar {
+    padding: 10px 12px;
+    gap: 10px;
+  }
+
+  .toolbar-actions {
+    width: 100%;
+    gap: 6px;
+  }
+
+  .action-btn {
+    padding: 6px 9px;
+    font-size: 0.74rem;
+  }
+
+  .seg-btn {
+    padding: 5px 8px;
+    font-size: 0.73rem;
+  }
+
+  .vignelli-content {
+    padding: 12px 14px 14px;
+    gap: 12px;
+  }
+
+  .station-name {
+    font-size: clamp(1.45rem, 6vw, 1.85rem);
+  }
+
+  .route-bullet {
+    width: 28px;
+    height: 28px;
+    font-size: 0.92rem;
+  }
+
+  .route-bullet.sm {
+    width: 21px;
+    height: 21px;
+    font-size: 0.72rem;
+  }
+
+  .route-bullet.lg {
+    width: 34px;
+    height: 34px;
+    font-size: 1.1rem;
+  }
+
+  .corridor-switcher-pill {
+    padding: 4px 8px 4px 5px;
+    gap: 5px;
+  }
+
+  .corridor-pill-label {
+    font-size: 0.62rem;
+    padding-left: 5px;
+  }
+
+  .station-meta-row {
+    font-size: 0.78rem;
+    gap: 6px;
+  }
+
+  .lcd-clock-cluster {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    padding-top: 10px;
+  }
+
+  .lcd-time {
+    font-size: 1.25rem;
+  }
+
+  .feed-badge {
+    font-size: 0.62rem;
+    padding: 2px 6px;
+  }
+
+  .updated-sub {
+    font-size: 0.68rem;
+  }
+
+  .direction-header {
+    padding: 11px 14px;
+  }
+
+  .dir-label {
+    font-size: 1.02rem;
+  }
+
+  .board-column-headers {
+    display: none;
+  }
+
+  .train-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 10px;
+    padding: 12px 14px;
+  }
+
+  .train-route-cell {
+    grid-column: 1;
+    grid-row: 1;
+    gap: 9px;
+  }
+
+  .train-distance-cell {
+    grid-column: 2;
+    grid-row: 1;
+    align-items: flex-end;
+  }
+
+  .train-location-cell {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    padding-top: 4px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .stops-away-badge {
+    font-size: 0.78rem;
+    padding: 4px 8px;
+  }
+
+  .location-status-banner {
+    font-size: 0.9rem;
+  }
+}
+
+
+/* Utility Hidden Class */
+.hidden {
+  display: none !important;
+}
+
+/* ============================================================================
+   VIEW 2: VERTICAL TRACK & PLATFORM DIAGRAM (Converging Local/Express Tracks)
+   ============================================================================ */
+
+.trackmap-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.trackmap-toolbar {
+  background: var(--bg-panel-elevated);
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.trackmap-title-cluster {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.trackmap-kicker {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.trackmap-heading {
+  font-size: 1.18rem;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.trackmap-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.track-legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.legend-platform-bar {
+  width: 24px;
+  height: 10px;
+  border-radius: 2px;
+  background: #1e293b;
+  border: 2px solid #cbd5e1;
+  display: inline-block;
+}
+
+.legend-rail {
+  width: 18px;
+  height: 4px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.legend-rail.merged {
+  background: #94a3b8;
+}
+
+.legend-rail.express {
+  background: #38bdf8;
+}
+
+.legend-train-car {
+  background: #0062cf;
+  color: #ffffff;
+  font-size: 0.68rem;
+  font-weight: 900;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1.5px solid #ffffff;
+  display: inline-block;
+}
+
+/* 3-Column Layout: [Southbound Corridor] | [Station Platform Card] | [Northbound Corridor] */
+.trackmap-grid-header {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.9fr) minmax(320px, 1.4fr) minmax(180px, 0.9fr);
+  align-items: center;
+  background: var(--bg-panel);
+  border-bottom: 2px solid var(--border-strong);
+  padding: 10px 16px;
+  font-size: 0.73rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  position: sticky;
+  top: 0;
+  z-index: 15;
+}
+
+.track-col-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.track-col-title {
+  line-height: 1.25;
+}
+
+.track-col-dir-sub {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  line-height: 1.2;
+  max-width: 240px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.track-col-sublabels {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  width: 100%;
+  max-width: 240px;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  gap: 4px;
+}
+
+.trackmap-diagram-body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Station Row & Inter-Station Segment Row */
+.tmap-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.9fr) minmax(320px, 1.4fr) minmax(180px, 0.9fr);
+  align-items: stretch;
+  padding: 0 16px;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.tmap-row.station-row {
+  min-height: 62px;
+  background: var(--bg-row);
+  cursor: pointer;
+  transition: background 0.12s ease;
+  flex-shrink: 0;
+}
+
+.tmap-row.station-row:hover {
+  background: var(--bg-row-hover);
+}
+
+.tmap-row.station-row.target-focus {
+  background: rgba(0, 98, 207, 0.14);
+}
+
+.tmap-row.segment-row {
+  min-height: 44px;
+  height: 44px;
+  background: var(--bg-panel);
+  flex-shrink: 0;
+}
+
+/* Direction Corridor Cell (Holds SVG Rails + Platform Stop Bar + Train Cars) */
+.tmap-corridor-cell {
+  position: relative;
+  width: 100%;
+  max-width: 280px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tmap-rail-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.svg-rail-local {
+  stroke: #64748b;
+  stroke-width: 3.5;
+  fill: none;
+  stroke-linecap: round;
+}
+
+.svg-rail-express {
+  stroke: #38bdf8;
+  stroke-width: 3.5;
+  fill: none;
+  stroke-linecap: round;
+}
+
+.svg-rail-merged {
+  stroke: #94a3b8;
+  stroke-width: 4.5;
+  fill: none;
+  stroke-linecap: round;
+}
+
+[data-theme="light"] .svg-rail-local {
+  stroke: #94a3b8;
+}
+[data-theme="light"] .svg-rail-express {
+  stroke: #0284c7;
+}
+[data-theme="light"] .svg-rail-merged {
+  stroke: #475569;
+}
+
+/* Rectangular Station Platform Stop Bar (Distinct from Circular Train Route Bullets) */
+.platform-stop-bar {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  height: 12px;
+  background: #1e293b;
+  border: 2px solid #cbd5e1;
+  border-radius: 3px;
+  z-index: 2;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45);
+}
+
+[data-theme="light"] .platform-stop-bar {
+  background: #ffffff;
+  border-color: #334155;
+}
+
+.platform-stop-bar.merged-platform {
+  left: 50%;
+  width: 34px;
+}
+
+.platform-stop-bar.wide-transfer-platform {
+  left: 50%;
+  width: 56%;
+  border-color: #93c5fd;
+}
+
+.platform-stop-bar.local-only-platform {
+  width: 28px;
+}
+
+.platform-stop-bar.express-track-platform {
+  border-color: #38bdf8;
+}
+
+.target-focus .platform-stop-bar {
+  border-color: #3fe090;
+  height: 14px;
+  box-shadow: 0 0 10px rgba(63, 224, 144, 0.55);
+}
+
+/* Active Train Car Tokens Positioned Along the Track */
+.track-slot {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.train-car-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px 2px 3px;
+  border-radius: 5px;
+  background: #0b0f17;
+  border: 1.5px solid #ffffff;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.65);
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.train-car-bullet {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.74rem;
+  font-weight: 900;
+  flex-shrink: 0;
+}
+
+.train-car-arrow {
+  font-size: 0.75rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+/* Center Station Architectural Box (Clearly Reads as a Station, No Route Circles) */
+.tmap-station-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 12px;
+  border-left: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  z-index: 3;
+  min-width: 0;
+}
+
+.station-platform-box {
+  width: 100%;
+  background: var(--bg-panel-elevated);
+  border: 1.5px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  min-width: 0;
+}
+
+.target-focus .station-platform-box {
+  border: 2px solid #3fe090;
+  background: rgba(0, 184, 101, 0.12);
+}
+
+[data-theme="light"] .target-focus .station-platform-box {
+  border-color: #0052b0;
+  background: rgba(0, 82, 176, 0.1);
+}
+
+.station-box-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tmap-station-name {
+  font-size: 0.94rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.tmap-station-track-note {
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1.3;
+}
+
+.tmap-offset-tag {
+  font-size: 0.66rem;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--badge-bg);
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  flex-shrink: 0;
+}
+
+.tmap-offset-tag.here {
+  background: var(--accent-green);
+  color: #ffffff;
+}
+
+.tmap-segment-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-left: 1px dashed var(--border-color);
+  border-right: 1px dashed var(--border-color);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+@media (max-width: 780px) {
+  .trackmap-toolbar {
+    padding: 12px 12px;
+    gap: 10px;
+  }
+
+  .trackmap-heading {
+    font-size: 0.98rem;
+  }
+
+  .track-legend {
+    gap: 8px 12px;
+    font-size: 0.68rem;
+  }
+
+  .trackmap-grid-header {
+    grid-template-columns: 78px minmax(0, 1fr) 78px;
+    padding: 8px 6px;
+    font-size: 0.62rem;
+    letter-spacing: 0.03em;
+  }
+
+  .track-col-title {
+    font-size: 0.56rem;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+  }
+
+  .track-col-dir-sub {
+    display: none;
+  }
+
+  .track-col-sublabels {
+    font-size: 0.52rem;
+  }
+
+  .tmap-row {
+    grid-template-columns: 78px minmax(0, 1fr) 78px;
+    padding: 0 6px;
+  }
+
+  .tmap-row.segment-row {
+    min-height: 36px;
+    height: 36px;
+  }
+
+  .tmap-station-center {
+    padding: 5px 6px;
+  }
+
+  .station-platform-box {
+    padding: 6px 8px;
+    gap: 2px;
+  }
+
+  .tmap-station-name {
+    font-size: 0.82rem;
+  }
+
+  .tmap-station-track-note {
+    font-size: 0.58rem;
+    letter-spacing: 0.02em;
+  }
+
+  .tmap-offset-tag {
+    font-size: 0.58rem;
+    padding: 1px 5px;
+  }
+
+  .station-other-links-row {
+    gap: 4px;
+    margin-top: 3px;
+    padding-top: 4px;
+  }
+
+  .station-other-label {
+    font-size: 0.56rem;
+  }
+
+  .station-transfer-chip {
+    font-size: 0.58rem;
+    padding: 1px 5px;
+  }
+
+  .platform-stop-bar.merged-platform {
+    width: 22px;
+    height: 9px;
+  }
+
+  .platform-stop-bar.local-only-platform {
+    width: 17px;
+    height: 9px;
+  }
+
+  .target-focus .platform-stop-bar {
+    height: 11px;
+  }
+
+  .train-car-token {
+    padding: 1px 4px 1px 2px;
+    gap: 2px;
+    font-size: 0.6rem;
+    border-width: 1px;
+  }
+
+  .train-car-bullet {
+    width: 14px;
+    height: 14px;
+    font-size: 0.58rem;
+  }
+
+  .train-car-arrow {
+    font-size: 0.6rem;
+  }
+}

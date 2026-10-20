@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MTA Subway Live Location Board — Times Sq-42 St</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Control Bar -->
+    <header class="control-bar" aria-label="Station and Feed Controls">
+      <div class="brand-cluster">
+        <span class="mta-logo-pill" aria-hidden="true">MTA</span>
+        <div class="brand-titles">
+          <span class="brand-kicker">NEW YORK CITY SUBWAY</span>
+          <span class="brand-subtitle">Live Train Position Display (All 496 Stations)</span>
+        </div>
+      </div>
+
+      <div class="station-picker-wrapper">
+        <div class="search-input-box">
+          <svg class="search-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="8.5" cy="8.5" r="5.5"></circle>
+            <line x1="13" y1="13" x2="18" y2="18"></line>
+          </svg>
+          <input
+            type="text"
+            id="station-search"
+            placeholder="Search all 496 stations or lines (e.g. Times Sq, Jay St, A, 7)..."
+            autocomplete="off"
+            aria-label="Search stations"
+          />
+          <kbd class="shortcut-hint" title="Press / to search">/</kbd>
+        </div>
+
+        <div id="station-dropdown" class="station-dropdown hidden" role="listbox" aria-label="Station list">
+          <div class="borough-tabs" id="borough-tabs">
+            <button type="button" class="borough-tab active" data-borough="ALL">All (496)</button>
+            <button type="button" class="borough-tab" data-borough="Manhattan">Manhattan</button>
+            <button type="button" class="borough-tab" data-borough="Brooklyn">Brooklyn</button>
+            <button type="button" class="borough-tab" data-borough="Queens">Queens</button>
+            <button type="button" class="borough-tab" data-borough="Bronx">Bronx</button>
+            <button type="button" class="borough-tab" data-borough="Staten Island">SIR</button>
+          </div>
+          <div id="station-list" class="station-list"></div>
+        </div>
+      </div>
+
+      <div class="toolbar-actions">
+        <button type="button" id="reset-high-st" class="action-btn" title="Jump back to Times Sq-42 St (Default)">
+          Times Sq-42 St
+        </button>
+
+        <!-- View Mode Switcher: Station Board vs Track Map -->
+        <div class="segmented-control" role="group" aria-label="View Mode">
+          <button type="button" class="seg-btn active" id="view-board-btn" title="Dual-direction station countdown board">
+            Station Board
+          </button>
+          <button type="button" class="seg-btn" id="view-trackmap-btn" title="Live Track Diagram showing converging Local & Express tracks">
+            Track Map
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Authentic MTA Vignelli Header Sign -->
+    <main class="lcd-monitor" aria-live="polite">
+      <div class="vignelli-sign">
+        <div class="vignelli-stripe"></div>
+        <div class="vignelli-content">
+          <div class="station-primary">
+            <div class="station-title-row">
+              <h1 id="station-name" class="station-name">Times Sq-42 St</h1>
+              <div id="station-bullets" class="station-bullets" aria-label="Station routes"></div>
+            </div>
+            <div class="station-meta-row">
+              <span id="station-line" class="station-meta-pill">Broadway - 7th Av Line</span>
+              <span class="meta-sep">•</span>
+              <span id="station-borough" class="station-meta-text">Manhattan</span>
+              <span class="meta-sep">•</span>
+              <span id="station-id-badge" class="station-id-code">GTFS #127</span>
+            </div>
+          </div>
+
+          <div class="lcd-clock-cluster">
+            <div id="lcd-time" class="lcd-time">--:--:--</div>
+            <div class="lcd-feed-meta">
+              <span id="feed-source-badge" class="feed-badge">LIVE MTA GTFS-RT</span>
+              <span id="last-updated-text" class="updated-sub">Updating...</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIEW 1: Dual Direction LCD Boards (Northbound & Southbound) -->
+      <div id="board-view-container" class="direction-boards-grid">
+        <!-- Northbound Panel -->
+        <section class="direction-panel" aria-labelledby="north-dir-heading">
+          <div class="direction-header">
+            <div class="dir-title-group">
+              <span class="dir-arrow north" aria-hidden="true">↑</span>
+              <div>
+                <div class="dir-kicker">NORTHBOUND / RAIL DIRECTION N</div>
+                <h2 id="north-dir-heading" class="dir-label">Manhattan</h2>
+              </div>
+            </div>
+            <span id="north-count-badge" class="train-count-pill">0 Trains</span>
+          </div>
+
+          <div class="board-column-headers">
+            <span class="col-route">Line / Terminal</span>
+            <span class="col-location">Current Train Location in System</span>
+            <span class="col-distance">Position</span>
+          </div>
+
+          <div id="north-trains" class="train-rows-container"></div>
+        </section>
+
+        <!-- Southbound Panel -->
+        <section class="direction-panel" aria-labelledby="south-dir-heading">
+          <div class="direction-header">
+            <div class="dir-title-group">
+              <span class="dir-arrow south" aria-hidden="true">↓</span>
+              <div>
+                <div class="dir-kicker">SOUTHBOUND / RAIL DIRECTION S</div>
+                <h2 id="south-dir-heading" class="dir-label">Euclid - Lefferts - Rockaways</h2>
+              </div>
+            </div>
+            <span id="south-count-badge" class="train-count-pill">0 Trains</span>
+          </div>
+
+          <div class="board-column-headers">
+            <span class="col-route">Line / Terminal</span>
+            <span class="col-location">Current Train Location in System</span>
+            <span class="col-distance">Position</span>
+          </div>
+
+          <div id="south-trains" class="train-rows-container"></div>
+        </section>
+      </div>
+
+      <!-- VIEW 2: Vertical Track & Platform Diagram -->
+      <section id="trackmap-view-container" class="trackmap-panel hidden" aria-label="Live Line Track Diagram">
+        <div class="trackmap-toolbar">
+          <div class="trackmap-title-cluster">
+            <span class="trackmap-kicker">LIVE TRACK &amp; PLATFORM DIAGRAM</span>
+            <h2 id="trackmap-heading" class="trackmap-heading">Broadway - 7th Av Line Corridor — Centered on Times Sq-42 St</h2>
+          </div>
+
+          <div class="trackmap-controls">
+            <div class="track-legend">
+              <span class="legend-item">
+                <span class="legend-platform-bar"></span> Station Platform
+              </span>
+              <span class="legend-item">
+                <span class="legend-rail merged"></span> Combined Track (Local + Express)
+              </span>
+              <span class="legend-item">
+                <span class="legend-rail express"></span> Express Bypass Track
+              </span>
+              <span class="legend-item">
+                <span class="legend-train-car">1 ↓</span> Active Train Car
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sticky Track Column Headers -->
+        <div id="trackmap-column-headers" class="trackmap-grid-header"></div>
+
+        <!-- Vertical Station & Inter-Station Track Rows -->
+        <div id="trackmap-diagram-body" class="trackmap-diagram-body"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
