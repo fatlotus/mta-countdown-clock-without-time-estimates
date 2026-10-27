@@ -61,6 +61,7 @@ type TrainArrival struct {
 	PreviousStop      string   `json:"previous_stop,omitempty"`
 	StopsAway         int      `json:"stops_away"`
 	StopsAwayLabel    string   `json:"stops_away_label"` // e.g., "In Station", "1 stop away", "4 stops away"
+	Track             string   `json:"track,omitempty"`  // Physical track identifier (e.g., "1", "2", "3", "4", "M")
 	RecentPath        []string `json:"recent_path"`      // Sequence of stops leading to the target station for strip map visualization
 	RecentStopIDs     []string `json:"recent_stop_ids,omitempty"`
 	SortOrder         int64    `json:"-"`
@@ -101,6 +102,7 @@ type TrackVehicle struct {
 	RouteTextColor string `json:"route_text_color"`
 	Direction      string `json:"direction"`   // "N" or "S"
 	TrackType      string `json:"track_type"`  // "LOCAL", "EXPRESS", or "MERGED"
+	Track          string `json:"track,omitempty"` // Physical track identifier (e.g. "1", "2", "3", "4", "M")
 	Placement      string `json:"placement"`   // "AT_STOP" or "BETWEEN_STOPS"
 	StopID         string `json:"stop_id"`     // Spine stop ID where train is stopped or approaching
 	FromStopID     string `json:"from_stop_id,omitempty"`

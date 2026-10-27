@@ -692,23 +692,56 @@ func (s *Service) extractLiveTrackVehicles(
 
 			rInfo := s.getRouteInfo(routeID)
 
-			trackType := "LOCAL"
+			currTrackInfo := ExtractNyctTrackInfo(stus[currIdx])
+			nextTrackInfo := NyctTrackInfo{}
+			if currIdx+1 < len(stus) {
+				nextTrackInfo = ExtractNyctTrackInfo(stus[currIdx+1])
+			}
+
+			reportedTrack := currTrackInfo.ActualTrack
+			if reportedTrack == "" {
+				reportedTrack = nextTrackInfo.ActualTrack
+			}
+			if reportedTrack == "" {
+				reportedTrack = currTrackInfo.ScheduledTrack
+			}
+			if reportedTrack == "" {
+				reportedTrack = nextTrackInfo.ScheduledTrack
+			}
+
+			trackType := ClassifyTrackType(reportedTrack)
+
 			if hasExpress {
-				if isExpressRoute[routeID] || defaultExpressRoutes[routeID] {
-					trackType = "EXPRESS"
-				}
-				if currIdx+1 < len(stus) {
-					nextClean := CleanStopID(stus[currIdx+1].GetStopId())
-					if nextSpineIdx, ok := spineIdxMap[nextClean]; ok {
-						diff := nextSpineIdx - nodeIdx
-						if diff < 0 {
-							diff = -diff
-						}
-						if diff > 1 {
-							trackType = "EXPRESS"
+				// If NYCT extension track is not present or not classified, infer dynamically
+				if trackType == "" {
+					currIsBypass := nodes[nodeIdx].HasExpressBypass
+					nextIsBypass := false
+					diff := 0
+					if currIdx+1 < len(stus) {
+						nextClean := CleanStopID(stus[currIdx+1].GetStopId())
+						if nextSpineIdx, ok := spineIdxMap[nextClean]; ok {
+							nextIsBypass = nodes[nextSpineIdx].HasExpressBypass
+							diff = nextSpineIdx - nodeIdx
+							if diff < 0 {
+								diff = -diff
+							}
 						}
 					}
+
+					if currIsBypass || nextIsBypass {
+						trackType = "LOCAL"
+					} else if diff > 1 {
+						trackType = "EXPRESS"
+					} else if diff == 1 {
+						trackType = "LOCAL"
+					} else if isExpressRoute[routeID] || defaultExpressRoutes[routeID] {
+						trackType = "EXPRESS"
+					} else {
+						trackType = "LOCAL"
+					}
 				}
+			} else {
+				trackType = "LOCAL"
 			}
 
 			veh := vehMap[tripID]
@@ -737,6 +770,8 @@ func (s *Service) extractLiveTrackVehicles(
 				statusLabel = fmt.Sprintf("Stopped at %s", currStopName)
 				if nodes[diagramNodeIdx].IsMergedTrack {
 					trackType = "MERGED"
+				} else if nodes[diagramNodeIdx].HasExpressBypass {
+					trackType = "LOCAL"
 				}
 			} else {
 				prevSpineIdx := nodeIdx - 1
@@ -765,6 +800,8 @@ func (s *Service) extractLiveTrackVehicles(
 					statusLabel = fmt.Sprintf("Approaching %s", currStopName)
 					if nodes[diagramNodeIdx].IsMergedTrack {
 						trackType = "MERGED"
+					} else if nodes[diagramNodeIdx].HasExpressBypass {
+						trackType = "LOCAL"
 					}
 				}
 			}
@@ -784,6 +821,7 @@ func (s *Service) extractLiveTrackVehicles(
 				RouteTextColor: rInfo.TextColor,
 				Direction:      dir,
 				TrackType:      trackType,
+				Track:          reportedTrack,
 				Placement:      placement,
 				StopID:         currStopID,
 				FromStopID:     fromStopID,
@@ -831,6 +869,9 @@ func (s *Service) buildSimulatedTrackVehicles(
 			trackType := "LOCAL"
 			if hasExpress && containsStr(expressRoutes, routeID) {
 				trackType = "EXPRESS"
+			}
+			if nodes[nodeIdx].HasExpressBypass {
+				trackType = "LOCAL"
 			}
 
 			placement := "AT_STOP"
