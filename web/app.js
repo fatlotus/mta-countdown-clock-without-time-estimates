@@ -553,7 +553,7 @@
 
       const tripSub = document.createElement("div");
       tripSub.className = "train-trip-sub";
-      tripSub.textContent = `Trip ${tr.trip_id}`;
+      tripSub.textContent = tr.track ? `Trip ${tr.trip_id} · Track ${tr.track}` : `Trip ${tr.trip_id}`;
 
       destGroup.appendChild(destName);
       destGroup.appendChild(tripSub);
@@ -858,7 +858,11 @@
           vList.forEach((v) => {
             const car = document.createElement("div");
             car.className = "train-car-token";
-            car.title = `${v.route_short_name} Train to ${v.destination}\n${v.status_label}`;
+            let carTitle = `${v.route_short_name} Train to ${v.destination}\n${v.status_label}`;
+            if (v.track) {
+              carTitle += `\nTrack: ${v.track}`;
+            }
+            car.title = carTitle;
 
             const b = document.createElement("span");
             b.className = "train-car-bullet";

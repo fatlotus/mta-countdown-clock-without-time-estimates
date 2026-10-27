@@ -219,8 +219,9 @@ func (s *Service) GetStationBoard(ctx context.Context, stationID string, focusRo
 	}
 
 	activeRoutes, transferLinks := s.resolveCorridorAndTransfers(st, focusRoute)
-	allowedRoutesSet := make(map[string]bool, len(activeRoutes))
-	for _, r := range activeRoutes {
+	trunkRoutes := TrunkCorridorRoutes(activeRoutes)
+	allowedRoutesSet := make(map[string]bool, len(trunkRoutes))
+	for _, r := range trunkRoutes {
 		allowedRoutesSet[r] = true
 		allowedRoutesSet[s.normalizeRouteID(r)] = true
 	}
@@ -255,7 +256,7 @@ func (s *Service) GetStationBoard(ctx context.Context, stationID string, focusRo
 
 	if forceSimulate {
 		s.populateSimulatedTrains(resp)
-		resp.TrackMap = s.buildTrackMap(st, activeRoutes, nil, true)
+		resp.TrackMap = s.buildTrackMap(st, trunkRoutes, nil, true)
 		return resp, nil
 	}
 
@@ -291,7 +292,7 @@ func (s *Service) GetStationBoard(ctx context.Context, stationID string, focusRo
 	if len(validFeeds) == 0 {
 		// Automatic fallback to simulated mode when offline
 		s.populateSimulatedTrains(resp)
-		resp.TrackMap = s.buildTrackMap(st, activeRoutes, nil, true)
+		resp.TrackMap = s.buildTrackMap(st, trunkRoutes, nil, true)
 		return resp, nil
 	}
 
@@ -393,7 +394,7 @@ func (s *Service) GetStationBoard(ctx context.Context, stationID string, focusRo
 		resp.Southbound.ServiceNote = "No active trains currently scheduled for this platform in live MTA feed (possible reroute or off-hours service change)."
 	}
 
-	resp.TrackMap = s.buildTrackMap(st, activeRoutes, validFeeds, false)
+	resp.TrackMap = s.buildTrackMap(st, trunkRoutes, validFeeds, false)
 
 	return resp, nil
 }
@@ -566,6 +567,19 @@ func (s *Service) resolveTrainArrival(
 		}
 	}
 
+	targetTrackInfo := ExtractNyctTrackInfo(targetSTU)
+	currTrackInfo := ExtractNyctTrackInfo(stus[currIdx])
+	arrTrack := targetTrackInfo.ActualTrack
+	if arrTrack == "" {
+		arrTrack = currTrackInfo.ActualTrack
+	}
+	if arrTrack == "" {
+		arrTrack = targetTrackInfo.ScheduledTrack
+	}
+	if arrTrack == "" {
+		arrTrack = currTrackInfo.ScheduledTrack
+	}
+
 	return TrainArrival{
 		TripID:            tu.GetTrip().GetTripId(),
 		RouteID:           routeID,
@@ -583,6 +597,7 @@ func (s *Service) resolveTrainArrival(
 		PreviousStop:      prevStopName,
 		StopsAway:         stopsAway,
 		StopsAwayLabel:    stopsAwayLabel,
+		Track:             arrTrack,
 		RecentPath:        recentPath,
 		RecentStopIDs:     recentStopIDs,
 		SortOrder:         targetTime,
