@@ -95,6 +95,12 @@
         </div>
       </div>
 
+      <!-- Prominent Staleness & Offline Warning Banner -->
+      <div id="stale-offline-banner" class="stale-banner hidden" role="status">
+        <div class="stale-banner-badge" id="stale-banner-badge">⚠️ STALE DATA (>30s)</div>
+        <div id="stale-banner-text" class="stale-banner-text">Showing cached train locations from subway Wi-Fi snapshot. Live tracking resumes at next station.</div>
+      </div>
+
       <!-- VIEW 1: Dual Direction LCD Boards (Northbound & Southbound) -->
       <div id="board-view-container" class="direction-boards-grid">
         <!-- Northbound Panel -->
@@ -193,6 +199,7 @@
     <button type="button" id="sw-dismiss-btn" class="sw-dismiss-btn" aria-label="Dismiss">&times;</button>
   </div>
 
+  <script src="/mta_catalog.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

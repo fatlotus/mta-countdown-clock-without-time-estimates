@@ -97,6 +97,11 @@ func (s *Service) GetStations() ([]Station, map[string]RouteInfo) {
 	return s.static.Stations, s.static.Routes
 }
 
+// GetStaticData returns the full static dataset including sequence topology.
+func (s *Service) GetStaticData() StaticData {
+	return s.static
+}
+
 // GetStation returns a single station by ID.
 func (s *Service) GetStation(id string) (Station, bool) {
 	st, ok := s.stationMap[id]

@@ -1,14 +1,15 @@
 // MTA.rip Service Worker — Subway Offline & Transit Wireless Resilience
-const CACHE_SHELL = "mta-shell-v3";
-const CACHE_CATALOG = "mta-catalog-v3";
-const CACHE_TRAINS = "mta-trains-v3";
-const CACHE_BOARDS = "mta-boards-v3";
+const CACHE_SHELL = "mta-shell-v4";
+const CACHE_CATALOG = "mta-catalog-v4";
+const CACHE_TRAINS = "mta-trains-v4";
+const CACHE_BOARDS = "mta-boards-v4";
 const MAX_CACHED_BOARDS = 30;
 
 const SHELL_ASSETS = [
   "/",
   "/index.html",
   "/styles.css",
+  "/mta_catalog.js",
   "/app.js",
   "/manifest.webmanifest"
 ];
@@ -165,25 +166,30 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // 2. Station Catalog: Stale-While-Revalidate
+  // 2. Station Catalog: Stale-While-Revalidate with Safe Offline Fallback
   if (url.pathname === "/api/stations") {
     event.respondWith(
-      caches.open(CACHE_CATALOG).then(async (cache) => {
+      (async () => {
+        const cache = await caches.open(CACHE_CATALOG);
         const cached = (await cache.match(event.request)) || (await cache.match("/api/stations"));
         if (typeof navigator !== "undefined" && navigator.onLine === false && cached) {
           return cached;
         }
-        const fetchPromise = fetch(event.request)
-          .then((res) => {
-            if (isCleanJson(res)) {
-              cache.put(event.request, res.clone());
-              cache.put("/api/stations", res.clone());
-            }
-            return res;
-          })
-          .catch(() => cached);
-        return cached || fetchPromise;
-      })
+        try {
+          const res = await fetch(event.request);
+          if (isCleanJson(res)) {
+            await cache.put(event.request, res.clone());
+            await cache.put("/api/stations", res.clone());
+          }
+          return res;
+        } catch (_) {
+          if (cached) return cached;
+          return new Response(JSON.stringify({ offline: true, stations: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+      })()
     );
     return;
   }

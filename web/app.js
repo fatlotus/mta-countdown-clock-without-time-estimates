@@ -59,6 +59,9 @@
 
   let allStations = [];
   let routeMap = {};
+  let canonicalSequences = {};
+  let daytimeSequences = {};
+  const stationMap = {};
   let currentStationId = DEFAULT_STATION_ID;
   let currentFocusRoute = "";
   let currentView = "board"; // "board" | "trackmap"
@@ -74,14 +77,36 @@
   let latestSystemTrains = null;
   let reconnectDebounceTimer = null;
 
-  // Immediately seed from localStorage so all 496 stations are interactive even offline
-  try {
-    const rawStations = window.localStorage.getItem(STORAGE_KEY_STATIONS);
-    if (rawStations) {
-      const parsed = JSON.parse(rawStations);
-      allStations = parsed.stations || [];
-      routeMap = parsed.routes || {};
+  // Initialize station catalog synchronously from bundled static data
+  function initStaticCatalog() {
+    if (typeof window !== "undefined" && window.MTA_STATIC_DATA) {
+      allStations = window.MTA_STATIC_DATA.stations || [];
+      routeMap = window.MTA_STATIC_DATA.routes || {};
+      canonicalSequences = window.MTA_STATIC_DATA.canonical_sequences || {};
+      daytimeSequences = window.MTA_STATIC_DATA.daytime_sequences || {};
+      allStations.forEach((s) => {
+        stationMap[s.id] = s;
+      });
     }
+  }
+  initStaticCatalog();
+
+  // If static data script wasn't loaded yet, try localStorage
+  if (allStations.length === 0) {
+    try {
+      const rawStations = window.localStorage.getItem(STORAGE_KEY_STATIONS);
+      if (rawStations) {
+        const parsed = JSON.parse(rawStations);
+        allStations = parsed.stations || [];
+        routeMap = parsed.routes || {};
+        allStations.forEach((s) => {
+          stationMap[s.id] = s;
+        });
+      }
+    } catch (_) {}
+  }
+
+  try {
     const rawTrains = window.localStorage.getItem(STORAGE_KEY_TRAINS);
     if (rawTrains) {
       latestSystemTrains = JSON.parse(rawTrains);
@@ -112,6 +137,31 @@
   const viewTrackmapBtn = document.getElementById("view-trackmap-btn");
   const boardViewContainer = document.getElementById("board-view-container");
   const trackmapViewContainer = document.getElementById("trackmap-view-container");
+
+  const staleBannerEl = document.getElementById("stale-offline-banner");
+  const staleBannerBadgeEl = document.getElementById("stale-banner-badge");
+  const staleBannerTextEl = document.getElementById("stale-banner-text");
+
+  function updateStaleBanner(show, badge = "", msg = "", isExpired = false) {
+    if (!staleBannerEl) return;
+    if (show) {
+      staleBannerEl.classList.remove("hidden");
+      if (isExpired) {
+        staleBannerEl.classList.add("expired");
+      } else {
+        staleBannerEl.classList.remove("expired");
+      }
+      if (staleBannerBadgeEl) {
+        staleBannerBadgeEl.textContent = badge || "⚠️ STALE DATA (>30s)";
+      }
+      if (staleBannerTextEl) {
+        staleBannerTextEl.textContent =
+          msg || "Showing cached train locations from subway Wi-Fi snapshot. Live tracking resumes at next station.";
+      }
+    } else {
+      staleBannerEl.classList.add("hidden");
+    }
+  }
 
   const trackmapHeadingEl = document.getElementById("trackmap-heading");
   const trackmapColumnHeadersEl = document.getElementById("trackmap-column-headers");
@@ -216,9 +266,14 @@
     try {
       const res = await fetch("/api/stations");
       const data = await res.json();
-      if (data && Array.isArray(data.stations)) {
+      if (data && Array.isArray(data.stations) && data.stations.length > 0) {
         allStations = data.stations;
-        routeMap = data.routes || {};
+        routeMap = data.routes || routeMap;
+        if (data.canonical_sequences) canonicalSequences = data.canonical_sequences;
+        if (data.daytime_sequences) daytimeSequences = data.daytime_sequences;
+        allStations.forEach((s) => {
+          stationMap[s.id] = s;
+        });
         try {
           window.localStorage.setItem(STORAGE_KEY_STATIONS, JSON.stringify(data));
         } catch (_) {}
@@ -296,20 +351,34 @@
     window.history.replaceState({}, "", url.toString());
   }
 
+  function normalizeSearchTerm(str) {
+    return (str || "")
+      .toLowerCase()
+      .replace(/\b(\d+)(st|nd|rd|th)\b/g, "$1") // "14th" -> "14", "42nd" -> "42"
+      .replace(/\bstreet\b/g, "st")
+      .replace(/\bavenue\b/g, "av")
+      .replace(/\bsquare\b/g, "sq")
+      .replace(/[^a-z0-9]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
   function renderStationDropdown() {
-    const query = (stationSearch.value || "").trim().toLowerCase();
+    const rawQuery = (stationSearch.value || "").trim().toLowerCase();
+    const normQuery = normalizeSearchTerm(rawQuery);
     stationListEl.innerHTML = "";
 
     const filtered = allStations.filter((st) => {
       if (selectedBorough !== "ALL" && st.borough !== selectedBorough) {
         return false;
       }
-      if (!query) return true;
-      const matchName = st.name.toLowerCase().includes(query);
-      const matchLine = st.line.toLowerCase().includes(query);
-      const matchId = st.id.toLowerCase().includes(query);
-      const matchRoute = (st.routes || []).some((r) => r.toLowerCase() === query);
-      return matchName || matchLine || matchId || matchRoute;
+      if (!rawQuery) return true;
+      const matchNameNorm = normalizeSearchTerm(st.name).includes(normQuery);
+      const matchNameRaw = st.name.toLowerCase().includes(rawQuery);
+      const matchLineNorm = normalizeSearchTerm(st.line).includes(normQuery);
+      const matchId = st.id.toLowerCase().includes(rawQuery);
+      const matchRoute = (st.routes || []).some((r) => r.toLowerCase() === rawQuery);
+      return matchNameNorm || matchNameRaw || matchLineNorm || matchId || matchRoute;
     });
 
     if (filtered.length === 0) {
@@ -369,6 +438,290 @@
     await loadStationBoard(stationId);
   }
 
+  const DEFAULT_EXPRESS_ROUTES = new Set([
+    "A", "B", "D", "E", "N", "Q",
+    "2", "3", "4", "5", "6X", "7X", "FX", "Z"
+  ]);
+
+  function getCleanRouteId(r) {
+    if (r === "SIR") return "SI";
+    if (r === "S") return "GS";
+    return r;
+  }
+
+  function getRouteSequence(r, stId) {
+    const nr = getCleanRouteId(r);
+    let s = daytimeSequences[nr + "_S"] || canonicalSequences[nr + "_S"];
+    if (!s || !s.includes(stId)) {
+      let rev = canonicalSequences[nr + "_N"];
+      if (rev && rev.includes(stId)) s = [...rev].reverse();
+    }
+    return s || [];
+  }
+
+  function buildStaticTrackMap(st, focusRoute = "") {
+    if (!st) return null;
+    const allRoutes = st.routes || [];
+    let corridorRoutes = [];
+
+    const primeRoute =
+      focusRoute && allRoutes.includes(focusRoute) ? focusRoute : allRoutes[0] || "1";
+    corridorRoutes.push(primeRoute);
+
+    const mainSeq = getRouteSequence(primeRoute, st.id);
+    const mIdx = mainSeq.indexOf(st.id);
+    const nb = new Set();
+    if (mIdx !== -1) {
+      for (let k = Math.max(0, mIdx - 3); k <= Math.min(mainSeq.length - 1, mIdx + 3); k++) {
+        nb.add(mainSeq[k]);
+      }
+    }
+
+    allRoutes.forEach((r) => {
+      if (r === primeRoute) return;
+      const rSeq = getRouteSequence(r, st.id);
+      const overlap = rSeq.filter((sid) => nb.has(sid)).length;
+      if (overlap >= 2) {
+        corridorRoutes.push(r);
+      }
+    });
+
+    // Merge sequences into North-to-South corridor spine
+    const cands = [];
+    corridorRoutes.forEach((r) => {
+      const seq = getRouteSequence(r, st.id);
+      if (seq && seq.includes(st.id)) {
+        cands.push({ r, seq });
+      }
+    });
+
+    let spine = [st.id];
+    if (cands.length > 0) {
+      cands.sort((a, b) => b.seq.length - a.seq.length);
+      spine = [...cands[0].seq];
+      for (let c = 1; c < cands.length; c++) {
+        const seq = cands[c].seq;
+        for (let i = 0; i < seq.length; i++) {
+          const sid = seq[i];
+          if (!spine.includes(sid)) {
+            let pIdx = -1;
+            for (let p = i - 1; p >= 0; p--) {
+              const idx = spine.indexOf(seq[p]);
+              if (idx !== -1) {
+                pIdx = idx;
+                break;
+              }
+            }
+            if (pIdx !== -1) {
+              spine.splice(pIdx + 1, 0, sid);
+            }
+          }
+        }
+      }
+    }
+
+    // Determine Local vs Express
+    const skippedMap = {};
+    corridorRoutes.forEach((r) => {
+      const rSeq = new Set(getRouteSequence(r, st.id));
+      let first = -1,
+        last = -1,
+        count = 0;
+      spine.forEach((sid, idx) => {
+        if (rSeq.has(sid)) {
+          if (first === -1) first = idx;
+          last = idx;
+          count++;
+        }
+      });
+      if (first !== -1 && last > first) {
+        skippedMap[r] = last - first + 1 - count;
+      } else {
+        skippedMap[r] = 0;
+      }
+    });
+
+    let localRoutes = [];
+    let expressRoutes = [];
+    if (corridorRoutes.length === 1) {
+      localRoutes = [...corridorRoutes];
+    } else {
+      corridorRoutes.forEach((r) => {
+        if (skippedMap[r] >= 2) {
+          expressRoutes.push(r);
+        } else {
+          localRoutes.push(r);
+        }
+      });
+      if (expressRoutes.length === 0 && corridorRoutes.length > 1) {
+        corridorRoutes.forEach((r) => {
+          if (DEFAULT_EXPRESS_ROUTES.has(r) && !expressRoutes.includes(r)) {
+            expressRoutes.push(r);
+          }
+        });
+        localRoutes = localRoutes.filter((r) => !expressRoutes.includes(r));
+      }
+      if (localRoutes.length === 0 && expressRoutes.length > 0) {
+        localRoutes = [...expressRoutes];
+        expressRoutes = [];
+      }
+    }
+
+    const hasExpress = expressRoutes.length > 0;
+    const isExpressSet = new Set(expressRoutes);
+    const targetIdx = Math.max(0, spine.indexOf(st.id));
+
+    // Construct nodes along spine
+    const nodes = [];
+    spine.forEach((sid, idx) => {
+      const sInfo =
+        stationMap[sid] ||
+        allStations.find((s) => s.id === sid) || {
+          id: sid,
+          name: sid,
+          borough: st.borough,
+          line: st.line,
+          routes: corridorRoutes,
+        };
+
+      const sRoutes = sInfo.routes || [];
+      const nodeLocal = localRoutes.filter((r) => {
+        const sSeq = getRouteSequence(r, sid);
+        return sSeq.includes(sid) || sRoutes.includes(r);
+      });
+      const nodeExpress = expressRoutes.filter((r) => {
+        const sSeq = getRouteSequence(r, sid);
+        return sSeq.includes(sid);
+      });
+
+      const allStop = [...new Set([...nodeLocal, ...nodeExpress])];
+      if (allStop.length === 0) {
+        allStop.push(...corridorRoutes.filter((r) => sRoutes.includes(r)));
+      }
+
+      // Compute transfer links to other lines at this station/complex
+      const otherLinks = [];
+      const nonCorridorRoutes = (sInfo.routes || []).filter((r) => !corridorRoutes.includes(r));
+      if (nonCorridorRoutes.length > 0) {
+        otherLinks.push({
+          station_id: sid,
+          line_name: sInfo.line || "Transfer Line",
+          routes: nonCorridorRoutes,
+        });
+      }
+      if (sInfo.complex_id) {
+        allStations.forEach((otherSt) => {
+          if (otherSt.complex_id === sInfo.complex_id && otherSt.id !== sid) {
+            const transferRoutes = (otherSt.routes || []).filter(
+              (r) => !corridorRoutes.includes(r)
+            );
+            if (transferRoutes.length > 0) {
+              const alreadyHas = otherLinks.some(
+                (l) => l.station_id === otherSt.id && l.line_name === otherSt.line
+              );
+              if (!alreadyHas) {
+                otherLinks.push({
+                  station_id: otherSt.id,
+                  line_name: otherSt.line,
+                  routes: transferRoutes,
+                });
+              }
+            }
+          }
+        });
+      }
+
+      nodes.push({
+        stop_id: sid,
+        name: sInfo.name,
+        borough: sInfo.borough,
+        is_target: sid === st.id,
+        offset_from_focus: idx - targetIdx,
+        local_routes: nodeLocal,
+        express_routes: nodeExpress,
+        all_stop_routes: allStop,
+        is_express_station: hasExpress && nodeExpress.length > 0,
+        has_express_bypass: false,
+        is_merged_track: !hasExpress || nodeExpress.length === 0 || nodeLocal.length === 0,
+        next_segment_tracks: "MERGED",
+        other_links: otherLinks,
+      });
+    });
+
+    const bypassIndices = [];
+    nodes.forEach((node, i) => {
+      const bypass = hasExpress && node.express_routes.length === 0 && node.local_routes.length > 0;
+      node.has_express_bypass = bypass;
+      if (bypass) bypassIndices.push(i);
+    });
+
+    const segTypes = new Array(nodes.length).fill("MERGED");
+    if (hasExpress && bypassIndices.length > 0) {
+      bypassIndices.forEach((bIdx) => {
+        if (bIdx > 0) segTypes[bIdx - 1] = "SPLIT";
+        if (bIdx < nodes.length - 1) segTypes[bIdx] = "SPLIT";
+      });
+      for (let k = 0; k + 1 < bypassIndices.length; k++) {
+        const b1 = bypassIndices[k];
+        const b2 = bypassIndices[k + 1];
+        if (b2 - b1 <= 3) {
+          for (let sIdx = b1; sIdx < b2; sIdx++) {
+            segTypes[sIdx] = "SPLIT";
+          }
+        }
+      }
+    }
+
+    nodes.forEach((node, i) => {
+      node.next_segment_tracks = segTypes[i];
+    });
+
+    // Active vehicles from system snapshot
+    const vehicles = [];
+    if (latestSystemTrains && Array.isArray(latestSystemTrains.trains)) {
+      const spineMap = new Map();
+      spine.forEach((sid, idx) => spineMap.set(sid, idx));
+
+      latestSystemTrains.trains.forEach((tr) => {
+        if (!corridorRoutes.includes(tr.route_id)) return;
+        const stopId = tr.current_stop_id;
+        if (!spineMap.has(stopId)) return;
+        const nodeIdx = spineMap.get(stopId);
+        const meta = getRouteMeta(tr.route_id);
+        const isExpTrain = isExpressSet.has(tr.route_id);
+
+        let placement = tr.status_type === "AT_STATION" ? "AT_STOP" : "BETWEEN_STOPS";
+        vehicles.push({
+          trip_id: tr.trip_id,
+          route_id: tr.route_id,
+          route_short_name: tr.route_short_name || tr.route_id,
+          route_color: meta.color || tr.route_color || "#7C858C",
+          route_text_color: meta.text_color || tr.route_text_color || "#FFFFFF",
+          direction: tr.direction,
+          destination: tr.destination,
+          destination_stop_id: tr.destination_stop_id,
+          status_label: tr.location_status || `${tr.route_id} Train to ${tr.destination}`,
+          placement: placement,
+          node_index: nodeIdx,
+          track_type: isExpTrain ? "EXPRESS" : "LOCAL",
+        });
+      });
+    }
+
+    return {
+      line_name: st.line,
+      has_express_track: hasExpress,
+      local_routes: localRoutes,
+      express_routes: expressRoutes,
+      corridor_routes: corridorRoutes,
+      north_label: st.north_label || "Northbound",
+      south_label: st.south_label || "Southbound",
+      target_index: targetIdx,
+      nodes: nodes,
+      vehicles: vehicles,
+    };
+  }
+
   async function loadStationBoard(stationId, isBackground = false) {
     if (!isBackground) {
       lastUpdatedTextEl.textContent = "Fetching train locations...";
@@ -389,6 +742,11 @@
         return;
       }
 
+      if (!board.track_map || !board.track_map.nodes || board.track_map.nodes.length === 0) {
+        const st = board.station || stationMap[stationId] || { id: stationId };
+        board.track_map = buildStaticTrackMap(st, currentFocusRoute);
+      }
+
       if (board.route_metadata) {
         routeMap = { ...routeMap, ...board.route_metadata };
       }
@@ -405,29 +763,38 @@
   }
 
   function handleOfflineStationFallback(stationId) {
-    const st = allStations.find((s) => s.id === stationId);
+    const st = allStations.find((s) => s.id === stationId) || stationMap[stationId];
     if (!st) {
       lastUpdatedTextEl.textContent = "Offline (Subway Wi-Fi unavailable)";
       return;
     }
 
+    const staticTrackMap = buildStaticTrackMap(st, currentFocusRoute);
+
     // Try to project board from cached system-wide trains snapshot
     if (latestSystemTrains && Array.isArray(latestSystemTrains.trains)) {
       const projected = projectBoardFromSystemTrains(st);
+      projected.track_map = staticTrackMap;
       latestBoardData = projected;
       renderBoard(projected);
       renderTrackMap(projected);
       isCurrentDataStale = true;
       boardViewContainer.classList.add("stale");
       trackmapViewContainer.classList.add("stale");
+      document.body.classList.add("stale");
       feedSourceBadgeEl.className = "feed-badge stale";
       feedSourceBadgeEl.textContent = "OFFLINE SNAPSHOT";
       lastUpdatedTextEl.textContent = "Cached snapshot (Offline)";
+      updateStaleBanner(
+        true,
+        "⚠️ OFFLINE SNAPSHOT",
+        "Viewing cached train locations from subway Wi-Fi snapshot (>30s old). Live tracking resumes at next station."
+      );
       return;
     }
 
-    // Uncached station with no snapshot: render clean offline station card
-    renderOfflineStationCard(st);
+    // Uncached station with no snapshot: render clean offline station card with interactive static track map
+    renderOfflineStationCard(st, staticTrackMap);
   }
 
   function projectBoardFromSystemTrains(st) {
@@ -508,7 +875,7 @@
     };
   }
 
-  function renderOfflineStationCard(st) {
+  function renderOfflineStationCard(st, staticTrackMap) {
     document.title = `MTA.rip — ${st.name} (Offline) — Unofficial NYC Subway Live Location Board`;
     stationNameEl.textContent = st.name;
     stationLineEl.textContent = `${st.line} Line (${(st.routes || []).join(" · ")})`;
@@ -523,13 +890,23 @@
     feedSourceBadgeEl.textContent = "OFFLINE • NO CACHE";
     feedSourceBadgeEl.className = "feed-badge stale";
     lastUpdatedTextEl.textContent = "Subway Wi-Fi Disconnected";
+    boardViewContainer.classList.add("stale");
+    trackmapViewContainer.classList.add("stale");
+    document.body.classList.add("stale");
+    isCurrentDataStale = true;
+
+    updateStaleBanner(
+      true,
+      "⚡ SUBWAY WI-FI OFFLINE",
+      `Live arrivals paused for ${st.name}. Network Track Map below is active and navigable offline. Live tracking resumes at next station.`
+    );
 
     northTrainsEl.innerHTML = `
       <div class="offline-station-card">
         <div class="offline-station-title">Subway Wi-Fi Offline</div>
         <div class="offline-station-desc">
-          Live train positions are not cached for this station.
-          Live tracking will automatically resume when connecting at the next station platform.
+          Live countdown is paused in the subway tunnel.
+          Switch to <strong>Track Map</strong> to explore connected stations, express bypass tracks, and line transfers.
         </div>
       </div>
     `;
@@ -537,24 +914,17 @@
       <div class="offline-station-card">
         <div class="offline-station-title">Subway Wi-Fi Offline</div>
         <div class="offline-station-desc">
-          Live train positions are not cached for this station.
-          Live tracking will automatically resume when connecting at the next station platform.
+          Live countdown is paused in the subway tunnel.
+          Switch to <strong>Track Map</strong> to explore connected stations, express bypass tracks, and line transfers.
         </div>
       </div>
     `;
     northCountBadgeEl.textContent = "Offline";
     southCountBadgeEl.textContent = "Offline";
 
-    trackmapHeadingEl.textContent = `${st.line} Line Corridor — Centered on ${st.name} (Offline)`;
-    trackmapColumnHeadersEl.innerHTML = "";
-    trackmapDiagramBodyEl.innerHTML = `
-      <div class="offline-station-card">
-        <div class="offline-station-title">Track Diagram Offline</div>
-        <div class="offline-station-desc">
-          Live multi-track diagram is not cached for this station. Switch to "Station Board" to view approaching train positions.
-        </div>
-      </div>
-    `;
+    const tmap = staticTrackMap || buildStaticTrackMap(st, currentFocusRoute);
+    latestBoardData = { station: st, active_routes: st.routes, track_map: tmap };
+    renderTrackMap(latestBoardData);
   }
 
   async function loadSystemTrains() {
@@ -574,27 +944,47 @@
   }
 
   function updateStalenessTicker() {
-    if (!lastSuccessfulFetchPerf) return;
+    let ageSeconds = 0;
+    if (lastSuccessfulFetchPerf) {
+      ageSeconds = Math.round((performance.now() - lastSuccessfulFetchPerf) / 1000);
+    }
+    if (latestBoardData && latestBoardData.feed_timestamp) {
+      const feedAge = Math.max(0, Math.round(Date.now() / 1000 - latestBoardData.feed_timestamp));
+      if (feedAge > ageSeconds) ageSeconds = feedAge;
+    }
 
-    const ageSeconds = Math.round((performance.now() - lastSuccessfulFetchPerf) / 1000);
+    const isOffline = typeof navigator !== "undefined" && navigator.onLine === false;
+    const isSnapshotSource =
+      latestBoardData && latestBoardData.data_source === "OFFLINE_SYSTEM_SNAPSHOT";
 
-    if (ageSeconds > 30) {
+    if (ageSeconds > 30 || isOffline || isSnapshotSource) {
       if (!isCurrentDataStale) {
         isCurrentDataStale = true;
         boardViewContainer.classList.add("stale");
         trackmapViewContainer.classList.add("stale");
+        document.body.classList.add("stale");
         feedSourceBadgeEl.className = "feed-badge stale";
-        feedSourceBadgeEl.textContent = "OFFLINE SNAPSHOT";
+        feedSourceBadgeEl.textContent = isSnapshotSource ? "OFFLINE SNAPSHOT" : "STALE DATA (>30s)";
       }
-      lastUpdatedTextEl.textContent = `Updated ${ageSeconds}s ago (Stale)`;
+      lastUpdatedTextEl.textContent = isOffline
+        ? "Offline (Subway Wi-Fi Disconnected)"
+        : `Updated ${ageSeconds > 0 ? ageSeconds + "s ago" : "from cache"} (Stale)`;
 
-      if (ageSeconds > 90) {
+      if (ageSeconds > 90 || (isSnapshotSource && ageSeconds > 60)) {
         if (!isCurrentDataExpired) {
           isCurrentDataExpired = true;
           boardViewContainer.classList.add("expired");
+          trackmapViewContainer.classList.add("expired");
+          document.body.classList.add("expired");
           feedSourceBadgeEl.className = "feed-badge expired";
           feedSourceBadgeEl.textContent = "HISTORICAL SNAPSHOT";
         }
+        updateStaleBanner(
+          true,
+          "⏱️ HISTORICAL DATA (>1m)",
+          `Data is ${ageSeconds > 0 ? ageSeconds + "s" : ""} old. Train arrival times and positions may no longer be accurate.`,
+          true
+        );
         // Qualify in-station train badges with historical timestamp to prevent commuters from rushing
         document.querySelectorAll(".train-row").forEach((row) => {
           const badge = row.querySelector(".stops-away-badge.now");
@@ -603,9 +993,17 @@
             row.classList.add("expired-train");
             const m = Math.max(1, Math.floor(ageSeconds / 60));
             badge.textContent = `Last seen in station (${m}m ago)`;
-            badge.title = "This train likely departed; snapshot is older than typical station dwell time.";
+            badge.title =
+              "This train likely departed; snapshot is older than typical station dwell time.";
           }
         });
+      } else {
+        updateStaleBanner(
+          true,
+          "⚠️ STALE DATA (>30s)",
+          `Viewing cached train locations from subway Wi-Fi snapshot (${ageSeconds}s old). Live tracking resumes at next station platform.`,
+          false
+        );
       }
     } else {
       if (isCurrentDataStale) {
@@ -613,8 +1011,11 @@
         isCurrentDataExpired = false;
         boardViewContainer.classList.remove("stale", "expired");
         trackmapViewContainer.classList.remove("stale", "expired");
+        document.body.classList.remove("stale", "expired");
         feedSourceBadgeEl.classList.remove("stale", "expired");
-        const isSimulated = latestBoardData && latestBoardData.data_source === "SIMULATED_FALLBACK";
+        updateStaleBanner(false);
+        const isSimulated =
+          latestBoardData && latestBoardData.data_source === "SIMULATED_FALLBACK";
         if (isSimulated) {
           feedSourceBadgeEl.textContent = "SIMULATED TRAIN POSITIONS";
           feedSourceBadgeEl.className = "feed-badge simulated";
@@ -1045,24 +1446,24 @@
   }
 
   function renderTrackMap(board) {
-    const tmap = board && board.track_map;
+    let tmap = board && board.track_map;
     if (!tmap || !Array.isArray(tmap.nodes) || tmap.nodes.length === 0) {
-      if (board && board.station) {
-        trackmapHeadingEl.textContent = `${board.station.name} (${(board.active_routes || board.station.routes || []).join("/")}) — Offline`;
-        trackmapColumnHeadersEl.innerHTML = "";
-        trackmapDiagramBodyEl.innerHTML = `
-          <div class="offline-station-card">
-            <div class="offline-station-title">Track Diagram Offline</div>
-            <div class="offline-station-desc">
-              Live multi-track diagram is not cached for this station. Switch to "Station Board" to view approaching train positions.
-            </div>
-          </div>
-        `;
+      const targetSt =
+        (board && board.station) ||
+        stationMap[currentStationId] ||
+        allStations.find((s) => s.id === currentStationId);
+      if (targetSt) {
+        tmap = buildStaticTrackMap(targetSt, currentFocusRoute);
+        if (board) board.track_map = tmap;
       }
+    }
+    if (!tmap || !Array.isArray(tmap.nodes) || tmap.nodes.length === 0) {
       return;
     }
 
-    const st = board.station;
+    const st =
+      (board && board.station) ||
+      stationMap[currentStationId] || { name: tmap.line_name, routes: [] };
     const hasExp = Boolean(tmap.has_express_track);
 
     trackmapHeadingEl.textContent = `${tmap.line_name} Line Corridor — Centered on ${st.name}`;

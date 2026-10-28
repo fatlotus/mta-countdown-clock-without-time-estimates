@@ -1708,39 +1708,116 @@ a.strip-node:hover {
    OFFLINE & STALENESS SUPPORT (SUBWAY WI-FI RESILIENCE)
    ========================================================================== */
 
-/* Hybrid Staleness: 50% Grayscale + Translucent + Amber Warning Halo (>30s) */
+/* High-Visibility Stale / Offline Notification Banner */
+.stale-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.65);
+  border-radius: 8px;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  font-size: 0.85rem;
+  color: #fbbf24;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  animation: fadeIn 0.3s ease;
+}
+
+.stale-banner.expired {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #fca5a5;
+}
+
+.stale-banner-badge {
+  font-weight: 800;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  background: rgba(245, 158, 11, 0.28);
+  border: 1px solid rgba(245, 158, 11, 0.8);
+  color: #fef3c7;
+  padding: 3px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.stale-banner.expired .stale-banner-badge {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.8);
+  color: #fee2e2;
+}
+
+.stale-banner-text {
+  flex: 1;
+  color: #f3f4f6;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+/* Obvious Staleness (>30s): 95% Grayscale + 45% Translucent + Amber Warning Halo */
 .stale .route-bullet,
-.route-bullet.stale {
-  filter: grayscale(0.5);
-  opacity: 0.55;
-  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.75);
-  transition: filter 0.4s ease, opacity 0.4s ease, box-shadow 0.4s ease;
+.route-bullet.stale,
+.stale .train-car-bullet,
+.train-car-bullet.stale {
+  filter: grayscale(0.95);
+  opacity: 0.45;
+  box-shadow: 0 0 0 1.5px rgba(245, 158, 11, 0.75);
+  transition: filter 0.3s ease, opacity 0.3s ease, box-shadow 0.3s ease;
 }
 
 .stale .train-car-token,
 .train-car-token.stale {
-  filter: grayscale(0.5);
-  opacity: 0.55;
+  filter: grayscale(0.95);
+  opacity: 0.5;
   border-color: #f59e0b;
   box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
-  transition: filter 0.4s ease, opacity 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease;
+  transition: filter 0.3s ease, opacity 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
-/* Expired Trains (> 90s): Historical Dwell Qualified */
+/* Turn pulsing live green dots to steady amber/grey */
+.stale .status-indicator-dot,
+.stale .status-live-dot {
+  background-color: #f59e0b !important;
+  box-shadow: none !important;
+  animation: none !important;
+}
+
+/* Desaturate arrival distance badges */
+.stale .stops-away-badge.now {
+  filter: grayscale(0.85);
+  opacity: 0.65;
+  background: rgba(245, 158, 11, 0.15) !important;
+  color: #f59e0b !important;
+  border-color: rgba(245, 158, 11, 0.4) !important;
+}
+
+/* Expired Trains (> 90s): 100% Grayscale + Historical Dwell Qualified */
 .expired .route-bullet,
-.route-bullet.expired {
-  filter: grayscale(0.7);
-  opacity: 0.4;
+.route-bullet.expired,
+.expired .train-car-bullet,
+.train-car-bullet.expired {
+  filter: grayscale(1);
+  opacity: 0.35;
   box-shadow: 0 0 0 1.5px rgba(156, 163, 175, 0.6);
 }
 
+.expired .train-car-token,
+.train-car-token.expired {
+  filter: grayscale(1);
+  opacity: 0.35;
+  border-color: #9ca3af;
+  box-shadow: none;
+}
+
 .train-row.expired-train {
-  opacity: 0.75;
+  opacity: 0.7;
 }
 
 .train-row.expired-train .status-indicator-dot {
   background-color: #9ca3af !important;
-  box-shadow: none;
+  box-shadow: none !important;
+  animation: none !important;
 }
 
 .status-stale-note {

@@ -41,11 +41,13 @@ func main() {
 
 	// GET /api/stations -> returns all 496 stations + route metadata + default station ID (127 Times Sq-42 St)
 	mux.HandleFunc("/api/stations", func(w http.ResponseWriter, r *http.Request) {
-		stations, routes := svc.GetStations()
+		static := svc.GetStaticData()
 		writeJSON(w, http.StatusOK, map[string]any{
-			"default_station_id": defaultStationID,
-			"stations":           stations,
-			"routes":             routes,
+			"default_station_id":  defaultStationID,
+			"stations":            static.Stations,
+			"routes":              static.Routes,
+			"canonical_sequences": static.CanonicalSequences,
+			"daytime_sequences":   static.DaytimeSequences,
 		})
 	})
 
