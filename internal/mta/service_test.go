@@ -80,4 +80,18 @@ func TestServiceStationsAndHighStreetDefault(t *testing.T) {
 	if len(jayF.TransferLinks) < 3 {
 		t.Errorf("expected at least 3 transfer corridor links (A/C, F, R) at Jay St-MetroTech, got %d", len(jayF.TransferLinks))
 	}
+
+	// Verify GetAllTrains returns system snapshot
+	sysTrains, err := svc.GetAllTrains(context.Background())
+	if err != nil {
+		t.Fatalf("GetAllTrains failed: %v", err)
+	}
+	if len(sysTrains.Trains) == 0 {
+		t.Fatalf("expected active trains in system snapshot, got 0")
+	}
+	for _, tr := range sysTrains.Trains {
+		if tr.TripID == "" || tr.RouteID == "" || tr.CurrentStopID == "" {
+			t.Errorf("expected valid train fields in system snapshot, got %+v", tr)
+		}
+	}
 }

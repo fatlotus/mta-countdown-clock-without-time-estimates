@@ -43,6 +43,19 @@ func main() {
 		})
 	})
 
+	// GET /api/trains -> returns system-wide snapshot of all active trains for offline caching
+	mux.HandleFunc("/api/trains", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		defer cancel()
+
+		trains, err := svc.GetAllTrains(ctx)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, trains)
+	})
+
 	// GET /api/board?station=A40&route=A&mode=auto|live|simulated
 	mux.HandleFunc("/api/board", func(w http.ResponseWriter, r *http.Request) {
 		stationID := r.URL.Query().Get("station")
@@ -69,6 +82,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid web directory: %v", err)
 	}
+
+	// Service Worker must never be HTTP cached so clients receive updates immediately
+	mux.HandleFunc("/sw.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		http.ServeFile(w, r, filepath.Join(absWeb, "sw.js"))
+	})
+
 	fs := http.FileServer(http.Dir(absWeb))
 	mux.Handle("/", fs)
 

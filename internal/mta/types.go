@@ -141,3 +141,30 @@ type StationBoardResponse struct {
 	LastUpdated   string               `json:"last_updated"`
 	FeedTimestamp int64                `json:"feed_timestamp"`
 }
+
+// SystemTrain represents an active train across the entire NYC subway system for offline caching.
+type SystemTrain struct {
+	TripID            string   `json:"trip_id"`
+	RouteID           string   `json:"route_id"`
+	RouteShortName    string   `json:"route_short_name"`
+	RouteColor        string   `json:"route_color"`
+	RouteTextColor    string   `json:"route_text_color"`
+	Direction         string   `json:"direction"`
+	Destination       string   `json:"destination"`
+	DestinationStopID string   `json:"destination_stop_id,omitempty"`
+	StatusType        string   `json:"status_type"`
+	CurrentStopID     string   `json:"current_stop_id"`
+	CurrentStop       string   `json:"current_stop"`
+	PreviousStopID    string   `json:"previous_stop_id,omitempty"`
+	PreviousStop      string   `json:"previous_stop,omitempty"`
+	UpcomingStopIDs   []string `json:"upcoming_stop_ids"`
+	Track             string   `json:"track,omitempty"`
+}
+
+// SystemTrainsResponse holds all active trains in the system for offline browsing across all 496 stations.
+type SystemTrainsResponse struct {
+	DataSource    string        `json:"data_source"`
+	FeedTimestamp int64         `json:"feed_timestamp"`
+	LastUpdated   string        `json:"last_updated"`
+	Trains        []SystemTrain `json:"trains"`
+}
