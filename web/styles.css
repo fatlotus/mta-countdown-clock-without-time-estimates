@@ -630,6 +630,18 @@ body {
   border-color: rgba(246, 188, 38, 0.45);
 }
 
+.feed-badge.stale {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.6);
+}
+
+.feed-badge.expired {
+  background: rgba(107, 114, 128, 0.25);
+  color: #9ca3af;
+  border-color: rgba(107, 114, 128, 0.5);
+}
+
 .updated-sub {
   font-size: 0.76rem;
   color: #9ba5b7;
@@ -1664,4 +1676,141 @@ a.strip-node:hover {
   color: var(--text-secondary);
   font-weight: 700;
 }
+
+/* ==========================================================================
+   OFFLINE & STALENESS SUPPORT (SUBWAY WI-FI RESILIENCE)
+   ========================================================================== */
+
+/* Hybrid Staleness: 50% Grayscale + Translucent + Amber Warning Halo (>30s) */
+.stale .route-bullet,
+.route-bullet.stale {
+  filter: grayscale(0.5);
+  opacity: 0.55;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.75);
+  transition: filter 0.4s ease, opacity 0.4s ease, box-shadow 0.4s ease;
+}
+
+.stale .train-car-token,
+.train-car-token.stale {
+  filter: grayscale(0.5);
+  opacity: 0.55;
+  border-color: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+  transition: filter 0.4s ease, opacity 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease;
+}
+
+/* Expired Trains (> 90s): Historical Dwell Qualified */
+.expired .route-bullet,
+.route-bullet.expired {
+  filter: grayscale(0.7);
+  opacity: 0.4;
+  box-shadow: 0 0 0 1.5px rgba(156, 163, 175, 0.6);
+}
+
+.train-row.expired-train {
+  opacity: 0.75;
+}
+
+.train-row.expired-train .status-indicator-dot {
+  background-color: #9ca3af !important;
+  box-shadow: none;
+}
+
+.status-stale-note {
+  font-size: 0.75rem;
+  color: #f59e0b;
+  font-weight: 600;
+  margin-left: 6px;
+}
+
+/* Offline Station Banner for Uncached Stops */
+.offline-station-card {
+  padding: 32px 20px;
+  text-align: center;
+  background: var(--card-bg);
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  margin: 14px 0;
+}
+
+.offline-station-title {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #fbbf24;
+  margin-bottom: 8px;
+}
+
+.offline-station-desc {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  max-width: 440px;
+  margin: 0 auto 16px;
+  line-height: 1.45;
+}
+
+/* Subtle Service Worker Update Notification Toast */
+.sw-update-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  background: #111827;
+  color: #f9fafb;
+  border: 1px solid #3b82f6;
+  border-radius: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.75);
+  font-size: 0.85rem;
+  font-weight: 600;
+  animation: swSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sw-update-toast.hidden {
+  display: none !important;
+}
+
+.sw-update-btn {
+  background: #0062cf;
+  color: #ffffff;
+  border: none;
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.sw-update-btn:hover {
+  background: #1d72db;
+}
+
+.sw-dismiss-btn {
+  background: transparent;
+  color: #9ca3af;
+  border: none;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.sw-dismiss-btn:hover {
+  color: #ffffff;
+}
+
+@keyframes swSlideUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
 

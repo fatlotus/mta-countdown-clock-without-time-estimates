@@ -40,6 +40,14 @@
   let latestBoardData = null;
   let refreshTimer = null;
 
+  // Offline & Staleness State (Subway Wi-Fi Resilience)
+  let lastSuccessfulFetchPerf = 0;
+  let lastSuccessfulFetchDate = null;
+  let isCurrentDataStale = false;
+  let isCurrentDataExpired = false;
+  let latestSystemTrains = null;
+  let reconnectDebounceTimer = null;
+
   // Sync theme with system prefers-color-scheme
   const colorSchemeMedia = window.matchMedia
     ? window.matchMedia("(prefers-color-scheme: dark)")
@@ -149,7 +157,14 @@
 
     updateClock();
     if (!isSnapshot) {
-      setInterval(updateClock, 1000);
+      setInterval(() => {
+        updateClock();
+        updateStalenessTicker();
+      }, 1000);
+      registerServiceWorker();
+      loadSystemTrains();
+      setInterval(loadSystemTrains, 25000);
+      setupReconnectListeners();
     }
 
     try {
@@ -316,16 +331,308 @@
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const board = await res.json();
+
+      // If Service Worker returned an empty offline response for an uncached station
+      if (board.offline && !board.station) {
+        handleOfflineStationFallback(stationId);
+        return;
+      }
+
       if (board.route_metadata) {
         routeMap = { ...routeMap, ...board.route_metadata };
       }
       latestBoardData = board;
+      lastSuccessfulFetchPerf = performance.now();
+      lastSuccessfulFetchDate = new Date();
       renderBoard(board);
       renderTrackMap(board);
+      updateStalenessTicker();
     } catch (err) {
       console.error("Failed to fetch station board:", err);
-      lastUpdatedTextEl.textContent = "Feed retry pending...";
+      handleOfflineStationFallback(stationId);
     }
+  }
+
+  function handleOfflineStationFallback(stationId) {
+    const st = allStations.find((s) => s.id === stationId);
+    if (!st) {
+      lastUpdatedTextEl.textContent = "Offline (Subway Wi-Fi unavailable)";
+      return;
+    }
+
+    // Try to project board from cached system-wide trains snapshot
+    if (latestSystemTrains && Array.isArray(latestSystemTrains.trains)) {
+      const projected = projectBoardFromSystemTrains(st);
+      latestBoardData = projected;
+      renderBoard(projected);
+      isCurrentDataStale = true;
+      boardViewContainer.classList.add("stale");
+      trackmapViewContainer.classList.add("stale");
+      feedSourceBadgeEl.className = "feed-badge stale";
+      feedSourceBadgeEl.textContent = "OFFLINE SNAPSHOT";
+      lastUpdatedTextEl.textContent = "Cached snapshot (Offline)";
+      return;
+    }
+
+    // Uncached station with no snapshot: render clean offline station card
+    renderOfflineStationCard(st);
+  }
+
+  function projectBoardFromSystemTrains(st) {
+    const activeRoutes = st.routes || [];
+    const trains = latestSystemTrains.trains || [];
+
+    const northTrains = [];
+    const southTrains = [];
+
+    trains.forEach((tr) => {
+      if (!activeRoutes.includes(tr.route_id)) return;
+      const upcoming = tr.upcoming_stop_ids || [];
+      const idx = upcoming.indexOf(st.id);
+      if (idx === -1) return;
+
+      const stopsAway = idx;
+      let stopsAwayLabel = `${stopsAway} stops away`;
+      if (stopsAway === 0) stopsAwayLabel = "In Station";
+      else if (stopsAway === 1) stopsAwayLabel = "1 stop away";
+
+      let statusType = tr.status_type || "APPROACHING";
+      let locStatus = `Approaching ${tr.current_stop}`;
+      if (statusType === "AT_STATION") {
+        locStatus = `At ${tr.current_stop}`;
+      } else if (statusType === "BETWEEN" && tr.previous_stop) {
+        locStatus = `Between ${tr.previous_stop} & ${tr.current_stop}`;
+      }
+
+      const arr = {
+        trip_id: tr.trip_id,
+        route_id: tr.route_id,
+        route_short_name: tr.route_short_name || tr.route_id,
+        route_color: tr.route_color || "#7C858C",
+        route_text_color: tr.route_text_color || "#FFFFFF",
+        direction: tr.direction,
+        destination: tr.destination,
+        destination_stop_id: tr.destination_stop_id,
+        location_status: locStatus,
+        status_type: stopsAway === 0 ? "AT_TARGET" : statusType,
+        current_stop_id: tr.current_stop_id,
+        current_stop: tr.current_stop,
+        previous_stop_id: tr.previous_stop_id,
+        previous_stop: tr.previous_stop,
+        stops_away: stopsAway,
+        stops_away_label: stopsAwayLabel,
+        recent_path: [tr.current_stop, st.name],
+        recent_stop_ids: [tr.current_stop_id, st.id],
+      };
+
+      if (tr.direction === "N") {
+        northTrains.push(arr);
+      } else {
+        southTrains.push(arr);
+      }
+    });
+
+    northTrains.sort((a, b) => a.stops_away - b.stops_away);
+    southTrains.sort((a, b) => a.stops_away - b.stops_away);
+
+    return {
+      station: st,
+      active_routes: activeRoutes,
+      transfer_links: [],
+      data_source: "OFFLINE_SYSTEM_SNAPSHOT",
+      feed_timestamp: latestSystemTrains.feed_timestamp || 0,
+      northbound: {
+        direction: "N",
+        label: st.north_label || "Northbound",
+        trains: northTrains.slice(0, 8),
+        service_note: northTrains.length === 0 ? "No active trains for this platform in offline snapshot." : "",
+      },
+      southbound: {
+        direction: "S",
+        label: st.south_label || "Southbound",
+        trains: southTrains.slice(0, 8),
+        service_note: southTrains.length === 0 ? "No active trains for this platform in offline snapshot." : "",
+      },
+    };
+  }
+
+  function renderOfflineStationCard(st) {
+    document.title = `MTA.rip — ${st.name} (Offline) — Unofficial NYC Subway Live Location Board`;
+    stationNameEl.textContent = st.name;
+    stationLineEl.textContent = `${st.line} Line (${(st.routes || []).join(" · ")})`;
+    stationBoroughEl.textContent = st.borough;
+    stationIdBadgeEl.textContent = `GTFS #${st.id}`;
+
+    stationBulletsEl.innerHTML = "";
+    (st.routes || []).forEach((r) => {
+      stationBulletsEl.appendChild(createRouteBullet(r));
+    });
+
+    feedSourceBadgeEl.textContent = "OFFLINE • NO CACHE";
+    feedSourceBadgeEl.className = "feed-badge stale";
+    lastUpdatedTextEl.textContent = "Subway Wi-Fi Disconnected";
+
+    northTrainsEl.innerHTML = `
+      <div class="offline-station-card">
+        <div class="offline-station-title">Subway Wi-Fi Offline</div>
+        <div class="offline-station-desc">
+          Live train positions are not cached for this station.
+          Live tracking will automatically resume when connecting at the next station platform.
+        </div>
+      </div>
+    `;
+    southTrainsEl.innerHTML = `
+      <div class="offline-station-card">
+        <div class="offline-station-title">Subway Wi-Fi Offline</div>
+        <div class="offline-station-desc">
+          Live train positions are not cached for this station.
+          Live tracking will automatically resume when connecting at the next station platform.
+        </div>
+      </div>
+    `;
+    northCountBadgeEl.textContent = "Offline";
+    southCountBadgeEl.textContent = "Offline";
+  }
+
+  async function loadSystemTrains() {
+    try {
+      const res = await fetch("/api/trains");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && Array.isArray(data.trains)) {
+        latestSystemTrains = data;
+      }
+    } catch (_) {
+      // Ignore background fetch failure in tunnel
+    }
+  }
+
+  function updateStalenessTicker() {
+    if (!lastSuccessfulFetchPerf) return;
+
+    const ageSeconds = Math.round((performance.now() - lastSuccessfulFetchPerf) / 1000);
+
+    if (ageSeconds > 30) {
+      if (!isCurrentDataStale) {
+        isCurrentDataStale = true;
+        boardViewContainer.classList.add("stale");
+        trackmapViewContainer.classList.add("stale");
+        feedSourceBadgeEl.className = "feed-badge stale";
+        feedSourceBadgeEl.textContent = "OFFLINE SNAPSHOT";
+      }
+      lastUpdatedTextEl.textContent = `Updated ${ageSeconds}s ago (Stale)`;
+
+      if (ageSeconds > 90) {
+        if (!isCurrentDataExpired) {
+          isCurrentDataExpired = true;
+          boardViewContainer.classList.add("expired");
+          feedSourceBadgeEl.className = "feed-badge expired";
+          feedSourceBadgeEl.textContent = "HISTORICAL SNAPSHOT";
+        }
+        // Qualify in-station train badges with historical timestamp to prevent commuters from rushing
+        document.querySelectorAll(".train-row").forEach((row) => {
+          const badge = row.querySelector(".stops-away-badge.now");
+          if (badge && !row.dataset.expiredAdjusted) {
+            row.dataset.expiredAdjusted = "true";
+            row.classList.add("expired-train");
+            const m = Math.max(1, Math.floor(ageSeconds / 60));
+            badge.textContent = `Last seen in station (${m}m ago)`;
+            badge.title = "This train likely departed; snapshot is older than typical station dwell time.";
+          }
+        });
+      }
+    } else {
+      if (isCurrentDataStale) {
+        isCurrentDataStale = false;
+        isCurrentDataExpired = false;
+        boardViewContainer.classList.remove("stale", "expired");
+        trackmapViewContainer.classList.remove("stale", "expired");
+        feedSourceBadgeEl.classList.remove("stale", "expired");
+        const isSimulated = latestBoardData && latestBoardData.data_source === "SIMULATED_FALLBACK";
+        if (isSimulated) {
+          feedSourceBadgeEl.textContent = "SIMULATED TRAIN POSITIONS";
+          feedSourceBadgeEl.className = "feed-badge simulated";
+        } else {
+          feedSourceBadgeEl.textContent = "LIVE MTA GTFS-RT";
+          feedSourceBadgeEl.className = "feed-badge";
+        }
+      }
+      if (lastSuccessfulFetchDate) {
+        const timeStr = lastSuccessfulFetchDate.toLocaleTimeString("en-US", {
+          hour12: false,
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        });
+        lastUpdatedTextEl.textContent = `Updated ${timeStr}`;
+      }
+    }
+  }
+
+  function setupReconnectListeners() {
+    const handleReconnect = () => {
+      clearTimeout(reconnectDebounceTimer);
+      // Debounce 1500ms to allow station Wi-Fi DHCP handshake to stabilize
+      reconnectDebounceTimer = setTimeout(() => {
+        loadStationBoard(currentStationId, false);
+        loadSystemTrains();
+      }, 1500);
+    };
+
+    window.addEventListener("online", handleReconnect);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        handleReconnect();
+      }
+    });
+  }
+
+  function registerServiceWorker() {
+    if (!("serviceWorker" in navigator)) return;
+
+    const updateToast = document.getElementById("sw-update-toast");
+    const updateBtn = document.getElementById("sw-update-btn");
+    const dismissBtn = document.getElementById("sw-dismiss-btn");
+
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!refreshing) {
+        refreshing = true;
+        window.location.reload();
+      }
+    });
+
+    window.addEventListener("load", () => {
+      navigator.serviceWorker
+        .register("/sw.js")
+        .then((reg) => {
+          reg.addEventListener("updatefound", () => {
+            const newWorker = reg.installing;
+            if (!newWorker) return;
+
+            newWorker.addEventListener("statechange", () => {
+              if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+                if (updateToast) {
+                  updateToast.classList.remove("hidden");
+                  if (updateBtn) {
+                    updateBtn.onclick = () => {
+                      newWorker.postMessage({ type: "SKIP_WAITING" });
+                    };
+                  }
+                  if (dismissBtn) {
+                    dismissBtn.onclick = () => {
+                      updateToast.classList.add("hidden");
+                    };
+                  }
+                }
+              }
+            });
+          });
+        })
+        .catch((err) => {
+          console.warn("ServiceWorker registration failed:", err);
+        });
+    });
   }
 
   function renderBoard(board) {
@@ -375,12 +682,16 @@
     }
 
     const isSimulated = board.data_source === "SIMULATED_FALLBACK";
-    if (isSimulated) {
+    const isOfflineSnapshot = board.data_source === "OFFLINE_SYSTEM_SNAPSHOT";
+    if (isOfflineSnapshot) {
+      feedSourceBadgeEl.textContent = "OFFLINE SNAPSHOT";
+      feedSourceBadgeEl.className = "feed-badge stale";
+    } else if (isSimulated) {
       feedSourceBadgeEl.textContent = "SIMULATED TRAIN POSITIONS";
-      feedSourceBadgeEl.classList.add("simulated");
+      feedSourceBadgeEl.className = "feed-badge simulated";
     } else {
       feedSourceBadgeEl.textContent = "LIVE MTA GTFS-RT";
-      feedSourceBadgeEl.classList.remove("simulated");
+      feedSourceBadgeEl.className = "feed-badge";
     }
 
     const updatedTime = new Date().toLocaleTimeString("en-US", {
@@ -389,7 +700,9 @@
       minute: "2-digit",
       second: "2-digit",
     });
-    lastUpdatedTextEl.textContent = `Updated ${updatedTime}`;
+    lastUpdatedTextEl.textContent = isOfflineSnapshot
+      ? `Cached snapshot (Offline)`
+      : `Updated ${updatedTime}`;
 
     renderDirectionPanel(
       board.northbound,

@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MTA.rip — Unofficial NYC Subway Live Location Board</title>
+  <meta name="theme-color" content="#0b0f17" />
+  <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -177,6 +179,13 @@
     <footer class="unofficial-notice" role="contentinfo">
       <strong>MTA.rip</strong> is an independent, unofficial project and is not an official website of, nor affiliated with or endorsed by, the Metropolitan Transportation Authority (MTA).
     </footer>
+  </div>
+
+  <!-- Subtle Service Worker Update Toast -->
+  <div id="sw-update-toast" class="sw-update-toast hidden" role="alert" aria-live="polite">
+    <span>App update available</span>
+    <button type="button" id="sw-update-btn" class="sw-update-btn">Reload</button>
+    <button type="button" id="sw-dismiss-btn" class="sw-dismiss-btn" aria-label="Dismiss">&times;</button>
   </div>
 
   <script src="/app.js"></script>
