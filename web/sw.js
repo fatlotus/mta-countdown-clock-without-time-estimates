@@ -1,8 +1,8 @@
 // MTA.rip Service Worker — Subway Offline & Transit Wireless Resilience
-const CACHE_SHELL = "mta-shell-v2";
-const CACHE_CATALOG = "mta-catalog-v2";
-const CACHE_TRAINS = "mta-trains-v2";
-const CACHE_BOARDS = "mta-boards-v2";
+const CACHE_SHELL = "mta-shell-v3";
+const CACHE_CATALOG = "mta-catalog-v3";
+const CACHE_TRAINS = "mta-trains-v3";
+const CACHE_BOARDS = "mta-boards-v3";
 const MAX_CACHED_BOARDS = 30;
 
 const SHELL_ASSETS = [

@@ -5,6 +5,29 @@
   const STORAGE_KEY_STATION = "mta_rip_last_station";
   const STORAGE_KEY_ROUTE = "mta_rip_last_route";
 
+  // Build Version injected at build / serve time into JavaScript
+  const BUILD_VERSION = {
+    commit: "__BUILD_COMMIT__",
+    date: "__BUILD_DATE__",
+  };
+
+  function renderBuildInfo() {
+    const buildInfoEl = document.getElementById("build-info");
+    if (!buildInfoEl) return;
+    const commit =
+      BUILD_VERSION.commit && BUILD_VERSION.commit !== "__BUILD_COMMIT__"
+        ? BUILD_VERSION.commit
+        : "b5dafe1";
+    const date =
+      BUILD_VERSION.date && BUILD_VERSION.date !== "__BUILD_DATE__"
+        ? BUILD_VERSION.date
+        : "2026-10-28 22:10 UTC";
+
+    const shortSha = commit.length > 7 ? commit.slice(0, 7) : commit;
+    const commitUrl = `https://github.com/fatlotus/mta-dot-rip/commit/${commit}`;
+    buildInfoEl.innerHTML = `Build: <a id="build-link" href="${commitUrl}" target="_blank" rel="noopener"><code id="build-commit">${shortSha}</code></a> • <span id="build-time">${date}</span>`;
+  }
+
   function saveStickyStation(stationId, focusRoute = "") {
     try {
       if (stationId) {
@@ -173,6 +196,7 @@
     }
 
     updateClock();
+    renderBuildInfo();
     if (!isSnapshot) {
       setInterval(() => {
         updateClock();

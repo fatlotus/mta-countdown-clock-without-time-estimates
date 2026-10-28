@@ -9,12 +9,18 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"mta-countdown/internal/mta"
 )
 
 const defaultStationID = "127" // Times Sq-42 St (Manhattan - 1/2/3 + Complex 611)
+
+var (
+	gitCommit = os.Getenv("COMMIT_SHA")
+	buildTime = time.Now().UTC().Format("2006-01-02 15:04:05 UTC")
+)
 
 func main() {
 	port := flag.String("port", "8080", "HTTP server port")
@@ -77,6 +83,18 @@ func main() {
 		writeJSON(w, http.StatusOK, board)
 	})
 
+	// GET /api/version -> returns current running build metadata
+	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
+		commit := gitCommit
+		if commit == "" {
+			commit = "dev"
+		}
+		writeJSON(w, http.StatusOK, map[string]string{
+			"commit":     commit,
+			"build_time": buildTime,
+		})
+	})
+
 	// Serve frontend files
 	absWeb, err := filepath.Abs(*webDir)
 	if err != nil {
@@ -88,6 +106,27 @@ func main() {
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		http.ServeFile(w, r, filepath.Join(absWeb, "sw.js"))
+	})
+
+	// Dynamically inject build metadata into app.js so cached Service Worker copies reflect exact build
+	mux.HandleFunc("/app.js", func(w http.ResponseWriter, r *http.Request) {
+		appJsPath := filepath.Join(absWeb, "app.js")
+		content, err := os.ReadFile(appJsPath)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		commit := gitCommit
+		if commit == "" {
+			commit = "dev"
+		}
+		replaced := strings.ReplaceAll(string(content), "__BUILD_COMMIT__", commit)
+		replaced = strings.ReplaceAll(replaced, "__BUILD_DATE__", buildTime)
+
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(replaced))
 	})
 
 	fs := http.FileServer(http.Dir(absWeb))
