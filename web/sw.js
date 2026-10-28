@@ -1,8 +1,8 @@
 // MTA.rip Service Worker — Subway Offline & Transit Wireless Resilience
-const CACHE_SHELL = "mta-shell-v1";
-const CACHE_CATALOG = "mta-catalog-v1";
-const CACHE_TRAINS = "mta-trains-v1";
-const CACHE_BOARDS = "mta-boards-v1";
+const CACHE_SHELL = "mta-shell-v2";
+const CACHE_CATALOG = "mta-catalog-v2";
+const CACHE_TRAINS = "mta-trains-v2";
+const CACHE_BOARDS = "mta-boards-v2";
 const MAX_CACHED_BOARDS = 30;
 
 const SHELL_ASSETS = [
@@ -13,12 +13,26 @@ const SHELL_ASSETS = [
   "/manifest.webmanifest"
 ];
 
-// Install: Precache App Shell
+// Install: Precache App Shell, Stations catalog, and Trains snapshot
 self.addEventListener("install", (event) => {
+  self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_SHELL).then((cache) => cache.addAll(SHELL_ASSETS))
+    Promise.all([
+      caches.open(CACHE_SHELL).then((cache) => cache.addAll(SHELL_ASSETS)),
+      caches.open(CACHE_CATALOG).then(async (cache) => {
+        try {
+          const res = await fetch("/api/stations");
+          if (isCleanJson(res)) await cache.put("/api/stations", res);
+        } catch (_) {}
+      }),
+      caches.open(CACHE_TRAINS).then(async (cache) => {
+        try {
+          const res = await fetch("/api/trains");
+          if (isCleanJson(res)) await cache.put("/api/trains", res);
+        } catch (_) {}
+      }),
+    ])
   );
-  // Do NOT auto skipWaiting; wait for user tap on update banner
 });
 
 // Message listener: User accepted update via banner
@@ -66,6 +80,18 @@ async function networkFirstWithTimeout(request, cacheName, timeoutMs = 3000, isB
   const cache = await caches.open(cacheName);
   const cachedRes = await cache.match(cacheKey);
 
+  // If phone is in Airplane Mode, return cached response immediately without blocking for 3s
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    if (cachedRes) return cachedRes;
+    return new Response(
+      JSON.stringify({ offline: true, error: "Subway network unavailable" }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      }
+    );
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -112,15 +138,46 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // 1. Station Catalog: Stale-While-Revalidate
+  // 1. Navigation Requests (e.g. reload or visiting with query params in airplane mode)
+  // ALWAYS return the cached app shell immediately so the browser never shows "Offline" in the URL bar
+  if (event.request.mode === "navigate") {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(CACHE_SHELL);
+        const cached = (await cache.match("/")) || (await cache.match("/index.html"));
+        if (cached) {
+          if (typeof navigator !== "undefined" && navigator.onLine) {
+            fetch(event.request)
+              .then((res) => {
+                if (res && res.ok) cache.put("/", res.clone());
+              })
+              .catch(() => {});
+          }
+          return cached;
+        }
+        try {
+          return await fetch(event.request);
+        } catch (_) {
+          return (await cache.match("/")) || (await cache.match("/index.html"));
+        }
+      })()
+    );
+    return;
+  }
+
+  // 2. Station Catalog: Stale-While-Revalidate
   if (url.pathname === "/api/stations") {
     event.respondWith(
       caches.open(CACHE_CATALOG).then(async (cache) => {
-        const cached = await cache.match(event.request);
+        const cached = (await cache.match(event.request)) || (await cache.match("/api/stations"));
+        if (typeof navigator !== "undefined" && navigator.onLine === false && cached) {
+          return cached;
+        }
         const fetchPromise = fetch(event.request)
           .then((res) => {
             if (isCleanJson(res)) {
               cache.put(event.request, res.clone());
+              cache.put("/api/stations", res.clone());
             }
             return res;
           })
@@ -131,22 +188,25 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // 2. System-Wide Trains Snapshot: Network-First (3s Timeout)
+  // 3. System-Wide Trains Snapshot: Network-First (3s Timeout)
   if (url.pathname === "/api/trains") {
     event.respondWith(networkFirstWithTimeout(event.request, CACHE_TRAINS, 3000, false));
     return;
   }
 
-  // 3. Station Board: Network-First (3s Timeout) with LRU
+  // 4. Station Board: Network-First (3s Timeout) with LRU
   if (url.pathname === "/api/board") {
     event.respondWith(networkFirstWithTimeout(event.request, CACHE_BOARDS, 3000, true));
     return;
   }
 
-  // 4. App Shell Assets: Cache-First
-  if (SHELL_ASSETS.includes(url.pathname) || url.pathname === "/") {
+  // 5. App Shell Static Assets (css, js, manifest): Cache-First
+  if (SHELL_ASSETS.includes(url.pathname)) {
     event.respondWith(
-      caches.match(event.request).then((cached) => cached || fetch(event.request))
+      caches.open(CACHE_SHELL).then(async (cache) => {
+        const cached = await cache.match(url.pathname);
+        return cached || fetch(event.request);
+      })
     );
     return;
   }

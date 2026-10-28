@@ -31,6 +31,9 @@
     }
   }
 
+  const STORAGE_KEY_STATIONS = "mta_rip_cached_stations";
+  const STORAGE_KEY_TRAINS = "mta_rip_cached_trains";
+
   let allStations = [];
   let routeMap = {};
   let currentStationId = DEFAULT_STATION_ID;
@@ -47,6 +50,20 @@
   let isCurrentDataExpired = false;
   let latestSystemTrains = null;
   let reconnectDebounceTimer = null;
+
+  // Immediately seed from localStorage so all 496 stations are interactive even offline
+  try {
+    const rawStations = window.localStorage.getItem(STORAGE_KEY_STATIONS);
+    if (rawStations) {
+      const parsed = JSON.parse(rawStations);
+      allStations = parsed.stations || [];
+      routeMap = parsed.routes || {};
+    }
+    const rawTrains = window.localStorage.getItem(STORAGE_KEY_TRAINS);
+    if (rawTrains) {
+      latestSystemTrains = JSON.parse(rawTrains);
+    }
+  } catch (_) {}
 
   // Sync theme with system prefers-color-scheme
   const colorSchemeMedia = window.matchMedia
@@ -167,35 +184,45 @@
       setupReconnectListeners();
     }
 
+    // Render dropdown immediately if we have cached stations in localStorage
+    if (allStations.length > 0) {
+      renderStationDropdown();
+    }
+
     try {
       const res = await fetch("/api/stations");
       const data = await res.json();
-      allStations = data.stations || [];
-      routeMap = data.routes || {};
-      const defaultId = data.default_station_id || DEFAULT_STATION_ID;
-
-      if (paramStation && allStations.some((s) => s.id === paramStation)) {
-        currentStationId = paramStation;
-        if (!isSnapshot) {
-          saveStickyStation(currentStationId, currentFocusRoute);
-        }
-      } else if (
-        !isSnapshot &&
-        sticky.stationId &&
-        allStations.some((s) => s.id === sticky.stationId)
-      ) {
-        currentStationId = sticky.stationId;
-        syncUrlParams();
-      } else {
-        currentStationId = defaultId;
+      if (data && Array.isArray(data.stations)) {
+        allStations = data.stations;
+        routeMap = data.routes || {};
+        try {
+          window.localStorage.setItem(STORAGE_KEY_STATIONS, JSON.stringify(data));
+        } catch (_) {}
       }
-
-      renderStationDropdown();
-      await loadStationBoard(currentStationId);
     } catch (err) {
-      console.error("Failed to initialize stations:", err);
-      lastUpdatedTextEl.textContent = "Connection error";
+      console.warn("Could not fetch fresh /api/stations (offline), using cached catalog:", err);
     }
+
+    const defaultId = (allStations[0] && allStations[0].id) || DEFAULT_STATION_ID;
+
+    if (paramStation && allStations.some((s) => s.id === paramStation)) {
+      currentStationId = paramStation;
+      if (!isSnapshot) {
+        saveStickyStation(currentStationId, currentFocusRoute);
+      }
+    } else if (
+      !isSnapshot &&
+      sticky.stationId &&
+      allStations.some((s) => s.id === sticky.stationId)
+    ) {
+      currentStationId = sticky.stationId;
+      syncUrlParams();
+    } else {
+      currentStationId = defaultId;
+    }
+
+    renderStationDropdown();
+    await loadStationBoard(currentStationId);
 
     if (!isSnapshot) {
       refreshTimer = setInterval(() => {
@@ -365,6 +392,7 @@
       const projected = projectBoardFromSystemTrains(st);
       latestBoardData = projected;
       renderBoard(projected);
+      renderTrackMap(projected);
       isCurrentDataStale = true;
       boardViewContainer.classList.add("stale");
       trackmapViewContainer.classList.add("stale");
@@ -492,6 +520,17 @@
     `;
     northCountBadgeEl.textContent = "Offline";
     southCountBadgeEl.textContent = "Offline";
+
+    trackmapHeadingEl.textContent = `${st.line} Line Corridor — Centered on ${st.name} (Offline)`;
+    trackmapColumnHeadersEl.innerHTML = "";
+    trackmapDiagramBodyEl.innerHTML = `
+      <div class="offline-station-card">
+        <div class="offline-station-title">Track Diagram Offline</div>
+        <div class="offline-station-desc">
+          Live multi-track diagram is not cached for this station. Switch to "Station Board" to view approaching train positions.
+        </div>
+      </div>
+    `;
   }
 
   async function loadSystemTrains() {
@@ -501,6 +540,9 @@
       const data = await res.json();
       if (data && Array.isArray(data.trains)) {
         latestSystemTrains = data;
+        try {
+          window.localStorage.setItem(STORAGE_KEY_TRAINS, JSON.stringify(data));
+        } catch (_) {}
       }
     } catch (_) {
       // Ignore background fetch failure in tunnel
@@ -979,8 +1021,20 @@
   }
 
   function renderTrackMap(board) {
-    const tmap = board.track_map;
+    const tmap = board && board.track_map;
     if (!tmap || !Array.isArray(tmap.nodes) || tmap.nodes.length === 0) {
+      if (board && board.station) {
+        trackmapHeadingEl.textContent = `${board.station.name} (${(board.active_routes || board.station.routes || []).join("/")}) — Offline`;
+        trackmapColumnHeadersEl.innerHTML = "";
+        trackmapDiagramBodyEl.innerHTML = `
+          <div class="offline-station-card">
+            <div class="offline-station-title">Track Diagram Offline</div>
+            <div class="offline-station-desc">
+              Live multi-track diagram is not cached for this station. Switch to "Station Board" to view approaching train positions.
+            </div>
+          </div>
+        `;
+      }
       return;
     }
 
