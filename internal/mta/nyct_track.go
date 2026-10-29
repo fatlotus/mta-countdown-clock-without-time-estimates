@@ -77,36 +77,91 @@ func ExtractNyctTrackInfo(stu *gtfs.TripUpdate_StopTimeUpdate) NyctTrackInfo {
 // "LOCAL", "EXPRESS", or "" (unknown / unclassified).
 //
 // In NYC Subway conventions:
-// 4-track lines:
+//
+// B Division (IND / BMT - lettered lines A, B, C, D, E, F, G, J, L, M, N, Q, R, W, Z):
+// Tracks use directional chaining where odd numbers are Southbound and even numbers are Northbound:
+// Track 1 = Southbound Local (e.g., A1)
+// Track 2 = Northbound Local (e.g., A2)
+// Track 3 = Southbound Express (e.g., A3)
+// Track 4 = Northbound Express (e.g., A4)
+// -> Tracks 1 and 2 are LOCAL; Tracks 3 and 4 are EXPRESS.
+//
+// A Division (IRT - numbered lines 1, 2, 3, 4, 5, 6, 7):
+// Tracks are numbered consecutively across the roadbed (typically west to east):
 // Track 1 = Southbound Local
 // Track 2 = Southbound Express
 // Track 3 = Northbound Express
 // Track 4 = Northbound Local
-// Track M = Peak Express (Middle Track)
-func ClassifyTrackType(track string) string {
+// -> Tracks 1 and 4 are LOCAL; Tracks 2 and 3 are EXPRESS.
+//
+// Track M (or TK3/TKM on 3-track lines) = Peak Express across all divisions.
+func ClassifyTrackType(track string, routeOrDivision ...string) string {
 	t := strings.ToUpper(strings.TrimSpace(track))
 	if t == "" {
 		return ""
 	}
+
+	// Explicit text labels
 	switch t {
-	case "1", "4", "TK1", "TK4", "T1", "T4", "L", "LOC", "LOCAL":
+	case "L", "LOC", "LOCAL":
 		return "LOCAL"
-	case "2", "3", "M", "TK2", "TK3", "TKM", "T2", "T3", "TM", "X", "EXP", "EXPRESS":
+	case "X", "EXP", "EXPRESS":
 		return "EXPRESS"
 	}
-	// Suffix matching for prefixed tracks like "A1", "B4", etc.
-	if strings.HasSuffix(t, "1") || strings.HasSuffix(t, "4") {
-		return "LOCAL"
-	}
-	if strings.HasSuffix(t, "2") || strings.HasSuffix(t, "3") || strings.HasSuffix(t, "M") {
+
+	// Peak express middle track
+	if t == "M" || t == "TKM" || t == "TM" || strings.HasSuffix(t, "M") {
 		return "EXPRESS"
 	}
+
+	// Check if this route/division or track prefix belongs to B Division (IND / BMT)
+	isB := true
+	if len(routeOrDivision) > 0 && routeOrDivision[0] != "" {
+		rd := strings.ToUpper(strings.TrimSpace(routeOrDivision[0]))
+		switch rd {
+		case "IRT", "A DIVISION", "A_DIVISION":
+			isB = false
+		case "1", "2", "3", "4", "5", "6", "6X", "7", "7X":
+			isB = false
+		default:
+			isB = true
+		}
+	} else {
+		// If no division/route context was passed, check for B-Division chaining prefixes (e.g., A1-A4, B1-B4, D1-D4, F1-F4)
+		if len(t) >= 2 && t[0] >= 'A' && t[0] <= 'Z' && t[0] != 'T' {
+			isB = true
+		}
+	}
+
+	if isB {
+		// B Division (IND / BMT):
+		// Tracks 1 & 2 are Local
+		// Tracks 3 & 4 are Express
+		if strings.HasSuffix(t, "1") || strings.HasSuffix(t, "2") {
+			return "LOCAL"
+		}
+		if strings.HasSuffix(t, "3") || strings.HasSuffix(t, "4") {
+			return "EXPRESS"
+		}
+	} else {
+		// A Division (IRT):
+		// Tracks 1 & 4 are Local
+		// Tracks 2 & 3 are Express
+		if strings.HasSuffix(t, "1") || strings.HasSuffix(t, "4") {
+			return "LOCAL"
+		}
+		if strings.HasSuffix(t, "2") || strings.HasSuffix(t, "3") {
+			return "EXPRESS"
+		}
+	}
+
 	if strings.Contains(t, "LOC") {
 		return "LOCAL"
 	}
 	if strings.Contains(t, "EXP") {
 		return "EXPRESS"
 	}
+
 	return ""
 }
 

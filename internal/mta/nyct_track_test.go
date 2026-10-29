@@ -11,12 +11,12 @@ import (
 )
 
 func TestExtractNyctTrackInfo(t *testing.T) {
-	// Build a synthetic NyctStopTimeUpdate protobuf message:
-	// Field 1 (scheduled_track): "2"
-	// Field 2 (actual_track): "1"
+	// Build a synthetic NyctStopTimeUpdate protobuf message for Southbound 8th Ave (A30S):
+	// Field 1 (scheduled_track): "3" (Southbound Express)
+	// Field 2 (actual_track): "1" (Southbound Local)
 	var subMsg []byte
 	subMsg = protowire.AppendTag(subMsg, 1, protowire.BytesType)
-	subMsg = protowire.AppendString(subMsg, "2")
+	subMsg = protowire.AppendString(subMsg, "3")
 	subMsg = protowire.AppendTag(subMsg, 2, protowire.BytesType)
 	subMsg = protowire.AppendString(subMsg, "1")
 
@@ -31,53 +31,82 @@ func TestExtractNyctTrackInfo(t *testing.T) {
 	stu.ProtoReflect().SetUnknown(rawExt)
 
 	info := ExtractNyctTrackInfo(stu)
-	if info.ScheduledTrack != "2" {
-		t.Errorf("expected scheduled track '2', got %q", info.ScheduledTrack)
+	if info.ScheduledTrack != "3" {
+		t.Errorf("expected scheduled track '3', got %q", info.ScheduledTrack)
 	}
 	if info.ActualTrack != "1" {
 		t.Errorf("expected actual track '1', got %q", info.ActualTrack)
 	}
 
-	// Verify ClassifyTrackType maps Track 1 to LOCAL and Track 2 to EXPRESS
-	if trackType := ClassifyTrackType(info.ActualTrack); trackType != "LOCAL" {
+	// Verify ClassifyTrackType maps Track 1 to LOCAL and Track 3 to EXPRESS for route A
+	if trackType := ClassifyTrackType(info.ActualTrack, "A"); trackType != "LOCAL" {
 		t.Errorf("expected actual track '1' to classify as 'LOCAL', got %q", trackType)
 	}
-	if trackType := ClassifyTrackType(info.ScheduledTrack); trackType != "EXPRESS" {
-		t.Errorf("expected scheduled track '2' to classify as 'EXPRESS', got %q", trackType)
+	if trackType := ClassifyTrackType(info.ScheduledTrack, "A"); trackType != "EXPRESS" {
+		t.Errorf("expected scheduled track '3' to classify as 'EXPRESS', got %q", trackType)
 	}
 }
 
 func TestClassifyTrackType(t *testing.T) {
 	tests := []struct {
 		track    string
+		route    string
 		expected string
 	}{
-		{"1", "LOCAL"},
-		{"4", "LOCAL"},
-		{"TK1", "LOCAL"},
-		{"TK4", "LOCAL"},
-		{"A1", "LOCAL"},
-		{"B4", "LOCAL"},
-		{"LOCAL", "LOCAL"},
-		{"LOC", "LOCAL"},
-		{"2", "EXPRESS"},
-		{"3", "EXPRESS"},
-		{"M", "EXPRESS"},
-		{"TK2", "EXPRESS"},
-		{"TK3", "EXPRESS"},
-		{"TKM", "EXPRESS"},
-		{"A2", "EXPRESS"},
-		{"B3", "EXPRESS"},
-		{"EXPRESS", "EXPRESS"},
-		{"EXP", "EXPRESS"},
-		{"", ""},
-		{"UNKNOWN", ""},
+		// B Division (IND / BMT): 1 & 2 are Local, 3 & 4 are Express
+		{"1", "A", "LOCAL"},
+		{"2", "A", "LOCAL"},
+		{"3", "A", "EXPRESS"},
+		{"4", "A", "EXPRESS"},
+		{"TK1", "A", "LOCAL"},
+		{"TK2", "A", "LOCAL"},
+		{"TK3", "A", "EXPRESS"},
+		{"TK4", "A", "EXPRESS"},
+		{"A1", "A", "LOCAL"},
+		{"A2", "A", "LOCAL"},
+		{"A3", "A", "EXPRESS"},
+		{"A4", "A", "EXPRESS"},
+		{"B1", "B", "LOCAL"},
+		{"B2", "B", "LOCAL"},
+		{"B3", "B", "EXPRESS"},
+		{"B4", "B", "EXPRESS"},
+		{"M", "D", "EXPRESS"},
+
+		// Chaining prefixes without route context explicitly passed
+		{"A1", "", "LOCAL"},
+		{"A2", "", "LOCAL"},
+		{"A3", "", "EXPRESS"},
+		{"A4", "", "EXPRESS"},
+		{"B2", "", "LOCAL"},
+		{"B4", "", "EXPRESS"},
+
+		// A Division (IRT): 1 & 4 are Local, 2 & 3 are Express
+		{"1", "1", "LOCAL"},
+		{"2", "1", "EXPRESS"},
+		{"3", "1", "EXPRESS"},
+		{"4", "1", "LOCAL"},
+		{"TK1", "1", "LOCAL"},
+		{"TK2", "1", "EXPRESS"},
+		{"TK3", "1", "EXPRESS"},
+		{"TK4", "1", "LOCAL"},
+		{"M", "1", "EXPRESS"},
+		{"TKM", "7", "EXPRESS"},
+		{"2", "IRT", "EXPRESS"},
+		{"4", "IRT", "LOCAL"},
+
+		// Explicit text keywords
+		{"LOCAL", "", "LOCAL"},
+		{"LOC", "", "LOCAL"},
+		{"EXPRESS", "", "EXPRESS"},
+		{"EXP", "", "EXPRESS"},
+		{"", "", ""},
+		{"UNKNOWN", "", ""},
 	}
 
 	for _, tc := range tests {
-		got := ClassifyTrackType(tc.track)
+		got := ClassifyTrackType(tc.track, tc.route)
 		if got != tc.expected {
-			t.Errorf("ClassifyTrackType(%q) = %q, expected %q", tc.track, got, tc.expected)
+			t.Errorf("ClassifyTrackType(%q, %q) = %q, expected %q", tc.track, tc.route, got, tc.expected)
 		}
 	}
 }
@@ -124,7 +153,7 @@ func TestExpressTrainRunningLocalTrackMapPlacement(t *testing.T) {
 	// and stopping at 23 St (A30S)
 	var subMsg []byte
 	subMsg = protowire.AppendTag(subMsg, 1, protowire.BytesType)
-	subMsg = protowire.AppendString(subMsg, "2") // scheduled express
+	subMsg = protowire.AppendString(subMsg, "3") // scheduled express on Southbound 8th Ave
 	subMsg = protowire.AppendTag(subMsg, 2, protowire.BytesType)
 	subMsg = protowire.AppendString(subMsg, "1") // actual local track
 
@@ -216,5 +245,109 @@ func TestStationBoardIncludesDisruptedExpressTrainAtLocalStation(t *testing.T) {
 	}
 	if !containsStr(board.TrackMap.CorridorRoutes, "A") {
 		t.Errorf("expected 23 St CorridorRoutes to include A; got %+v", board.TrackMap.CorridorRoutes)
+	}
+}
+
+func TestNorthboundTracksAt14thStreet(t *testing.T) {
+	staticPath := filepath.Join("..", "..", "data", "mta_static.json")
+	svc, err := NewService(staticPath)
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	st, ok := svc.GetStation("A31") // 14 St (express station on 8th Av)
+	if !ok {
+		t.Fatalf("expected station A31 (14 St)")
+	}
+
+	// Helper to create an NYCT stop time update extension with track info
+	makeTrackExt := func(track string) []byte {
+		var subMsg []byte
+		subMsg = protowire.AppendTag(subMsg, 1, protowire.BytesType)
+		subMsg = protowire.AppendString(subMsg, track)
+		subMsg = protowire.AppendTag(subMsg, 2, protowire.BytesType)
+		subMsg = protowire.AppendString(subMsg, track)
+
+		var rawExt []byte
+		rawExt = protowire.AppendTag(rawExt, 1001, protowire.BytesType)
+		rawExt = protowire.AppendBytes(rawExt, subMsg)
+		return rawExt
+	}
+
+	// Northbound E train stopped on Track 2 (Local)
+	stuE14 := &gtfs.TripUpdate_StopTimeUpdate{
+		StopId: proto.String("A31N"),
+		Arrival: &gtfs.TripUpdate_StopTimeEvent{
+			Time: proto.Int64(100),
+		},
+		Departure: &gtfs.TripUpdate_StopTimeEvent{
+			Time: proto.Int64(120),
+		},
+	}
+	stuE14.ProtoReflect().SetUnknown(makeTrackExt("2"))
+
+	// Northbound A train stopped on Track 4 (Express)
+	stuA14 := &gtfs.TripUpdate_StopTimeUpdate{
+		StopId: proto.String("A31N"),
+		Arrival: &gtfs.TripUpdate_StopTimeEvent{
+			Time: proto.Int64(100),
+		},
+		Departure: &gtfs.TripUpdate_StopTimeEvent{
+			Time: proto.Int64(120),
+		},
+	}
+	stuA14.ProtoReflect().SetUnknown(makeTrackExt("4"))
+
+	mockFeed := &gtfs.FeedMessage{
+		Header: &gtfs.FeedHeader{
+			GtfsRealtimeVersion: proto.String("2.0"),
+			Timestamp:           proto.Uint64(105),
+		},
+		Entity: []*gtfs.FeedEntity{
+			{
+				Id: proto.String("e_train"),
+				TripUpdate: &gtfs.TripUpdate{
+					Trip: &gtfs.TripDescriptor{
+						TripId:  proto.String("E_TRIP_NB"),
+						RouteId: proto.String("E"),
+					},
+					StopTimeUpdate: []*gtfs.TripUpdate_StopTimeUpdate{stuE14},
+				},
+			},
+			{
+				Id: proto.String("a_train"),
+				TripUpdate: &gtfs.TripUpdate{
+					Trip: &gtfs.TripDescriptor{
+						TripId:  proto.String("A_TRIP_NB"),
+						RouteId: proto.String("A"),
+					},
+					StopTimeUpdate: []*gtfs.TripUpdate_StopTimeUpdate{stuA14},
+				},
+			},
+		},
+	}
+
+	trunkRoutes := TrunkCorridorRoutes(st.Routes)
+	tmap := svc.buildTrackMap(st, trunkRoutes, []*gtfs.FeedMessage{mockFeed}, false)
+
+	vehMap := make(map[string]TrackVehicle)
+	for _, v := range tmap.Vehicles {
+		vehMap[v.TripID] = v
+	}
+
+	eVeh, ok := vehMap["E_TRIP_NB"]
+	if !ok {
+		t.Fatalf("expected E train vehicle in track map")
+	}
+	if eVeh.TrackType != "LOCAL" {
+		t.Errorf("expected Northbound E train on Track 2 to have TrackType='LOCAL', got %q", eVeh.TrackType)
+	}
+
+	aVeh, ok := vehMap["A_TRIP_NB"]
+	if !ok {
+		t.Fatalf("expected A train vehicle in track map")
+	}
+	if aVeh.TrackType != "EXPRESS" {
+		t.Errorf("expected Northbound A train on Track 4 to have TrackType='EXPRESS', got %q", aVeh.TrackType)
 	}
 }

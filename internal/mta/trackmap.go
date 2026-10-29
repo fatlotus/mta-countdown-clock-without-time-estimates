@@ -709,39 +709,14 @@ func (s *Service) extractLiveTrackVehicles(
 				reportedTrack = nextTrackInfo.ScheduledTrack
 			}
 
-			trackType := ClassifyTrackType(reportedTrack)
+			trackType := ClassifyTrackType(reportedTrack, routeID)
 
-			if hasExpress {
-				// If NYCT extension track is not present or not classified, infer dynamically
-				if trackType == "" {
-					currIsBypass := nodes[nodeIdx].HasExpressBypass
-					nextIsBypass := false
-					diff := 0
-					if currIdx+1 < len(stus) {
-						nextClean := CleanStopID(stus[currIdx+1].GetStopId())
-						if nextSpineIdx, ok := spineIdxMap[nextClean]; ok {
-							nextIsBypass = nodes[nextSpineIdx].HasExpressBypass
-							diff = nextSpineIdx - nodeIdx
-							if diff < 0 {
-								diff = -diff
-							}
-						}
-					}
-
-					if currIsBypass || nextIsBypass {
-						trackType = "LOCAL"
-					} else if diff > 1 {
-						trackType = "EXPRESS"
-					} else if diff == 1 {
-						trackType = "LOCAL"
-					} else if isExpressRoute[routeID] || defaultExpressRoutes[routeID] {
-						trackType = "EXPRESS"
-					} else {
-						trackType = "LOCAL"
-					}
+			if trackType == "" {
+				if hasExpress && (isExpressRoute[routeID] || defaultExpressRoutes[routeID]) {
+					trackType = "EXPRESS"
+				} else {
+					trackType = "LOCAL"
 				}
-			} else {
-				trackType = "LOCAL"
 			}
 
 			veh := vehMap[tripID]
