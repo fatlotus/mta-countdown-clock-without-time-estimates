@@ -38,20 +38,29 @@ func main() {
 	}
 	svc.StartBackgroundSync(context.Background(), 10*time.Second)
 
+	static := svc.GetStaticData()
+	staticBytes, err := json.Marshal(map[string]any{
+		"default_station_id":  defaultStationID,
+		"stations":            static.Stations,
+		"routes":              static.Routes,
+		"canonical_sequences": static.CanonicalSequences,
+		"daytime_sequences":   static.DaytimeSequences,
+		"spines":              static.Spines,
+		"station_corridors":   static.StationCorridors,
+	})
+	if err != nil {
+		log.Fatalf("Failed to marshal static catalog: %v", err)
+	}
+	catalogJsBytes := []byte("// Static MTA Network Catalog (496 Stations + Precomputed Corridors & Spines)\nwindow.MTA_STATIC_DATA = " + string(staticBytes) + ";\n")
+
 	mux := http.NewServeMux()
 
 	// GET /api/stations -> returns all 496 stations + route metadata + default station ID (127 Times Sq-42 St)
 	mux.HandleFunc("/api/stations", func(w http.ResponseWriter, r *http.Request) {
-		static := svc.GetStaticData()
-		writeJSON(w, http.StatusOK, map[string]any{
-			"default_station_id":  defaultStationID,
-			"stations":            static.Stations,
-			"routes":              static.Routes,
-			"canonical_sequences": static.CanonicalSequences,
-			"daytime_sequences":   static.DaytimeSequences,
-			"spines":              static.Spines,
-			"station_corridors":   static.StationCorridors,
-		})
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(staticBytes)
 	})
 
 	// GET /api/trains -> returns system-wide snapshot of all active trains for offline caching
@@ -111,6 +120,14 @@ func main() {
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		http.ServeFile(w, r, filepath.Join(absWeb, "sw.js"))
+	})
+
+	// Dynamically serve static MTA catalog for zero-latency synchronous initialization
+	mux.HandleFunc("/mta_catalog.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(catalogJsBytes)
 	})
 
 	// Dynamically inject build metadata into app.js so cached Service Worker copies reflect exact build
