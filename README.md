@@ -22,6 +22,10 @@ Instead of displaying arrival minute predictions, this board tells riders **wher
 - **Corridor Isolation & Complex Transfer Links**:
   - Filters both the Station Board and Track Map strictly to trains running on the active physical track corridor.
   - Provides deterministic corridor/line switcher buttons in the Vignelli station header and `OTHER LINES ↗` transfer chips on each station platform card in Track Map Mode (linking across multi-corridor stations and multi-platform MTA station complexes).
+- **Offline-First & "Lie-Fi" Resilient**:
+  - Precomputes all 496 stations, 532 station corridors, and 80 unique local/express track diagram spines once at server startup, caching 100% of station and track topology on the client (`localStorage`, Service Worker cache, and `/mta_catalog.js`).
+  - Renders station switches, corridor changes, and track maps synchronously in `0ms` by projecting the latest cached system-wide train snapshot locally on the client.
+  - Background syncs `/api/trains` and `/api/stations` behind strict `AbortController` timeouts (`2.5s` in the Service Worker, `3.5s` in the client) with JSON schema validation so slow or captive-portal subway Wi-Fi ("lie-fi") never blocks the UI, even when `navigator.onLine === true`.
 - **Responsive & System Theme Aware**: Automatically follows the operating system's light/dark mode (`prefers-color-scheme`) and adapts cleanly from desktop monitors down to `390px` mobile screens.
 
 ---
@@ -33,15 +37,18 @@ Instead of displaying arrival minute predictions, this board tells riders **wher
 ├── data/
 │   └── mta_static.json        # Static GTFS stations, complexes, routes, and stop sequences
 ├── internal/mta/
-│   ├── types.go               # API response and domain types
-│   ├── service.go             # GTFS-RT feed fetcher, cache, and station board builder
-│   ├── trackmap.go            # Corridor grouping, local/express track topology & vehicle mapper
+│   ├── types.go               # API response, topology, and system train domain types
+│   ├── topology.go            # Startup precomputation of corridors, transfers, and track spines
+│   ├── topology_test.go       # Unit tests for precomputed station corridors and track spines
+│   ├── service.go             # Background GTFS-RT sync, unified train parser & board projection
+│   ├── trackmap.go            # Vehicle-to-spine track projection for Track Map mode
 │   └── service_test.go        # Unit tests for station board, track map, and corridor isolation
 ├── web/
 │   ├── index.html             # App shell, Vignelli header sign, and board/diagram containers
 │   ├── styles.css             # Responsive dark/light LCD & track diagram styling
-│   └── app.js                 # Frontend state, station search, board & SVG track renderer
-├── main.go                    # HTTP server (/api/stations, /api/board, static assets)
+│   ├── sw.js                  # Two-cache Service Worker with strict lie-fi timeouts
+│   └── app.js                 # Offline-first client state, local board/track projection & background sync
+├── main.go                    # HTTP server (/api/stations, /api/trains, /api/board, /mta_catalog.js)
 └── Dockerfile                 # Multi-stage Go build for Google Cloud Run
 ```
 
