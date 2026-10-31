@@ -1,9 +1,7 @@
 // MTA.rip Service Worker — Subway Offline & Transit Wireless Resilience
-const CACHE_SHELL = "mta-shell-v4";
-const CACHE_CATALOG = "mta-catalog-v4";
-const CACHE_TRAINS = "mta-trains-v4";
-const CACHE_BOARDS = "mta-boards-v4";
-const MAX_CACHED_BOARDS = 30;
+const CACHE_SHELL = "mta-shell-v5";
+const CACHE_API = "mta-api-v5";
+const API_TIMEOUT_MS = 2500;
 
 const SHELL_ASSETS = [
   "/",
@@ -11,28 +9,62 @@ const SHELL_ASSETS = [
   "/styles.css",
   "/mta_catalog.js",
   "/app.js",
-  "/manifest.webmanifest"
+  "/manifest.webmanifest",
 ];
 
-// Install: Precache App Shell, Stations catalog, and Trains snapshot
+// Helper: fetch with timeout and no-store cache to avoid HTTP stale layers
+async function fetchWithTimeout(resource, timeoutMs = API_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(resource, { signal: controller.signal, cache: "no-store" });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Captive Portal & HTML Splash Protection
+// Subway station Wi-Fi often returns HTTP 200 with HTML login page instead of JSON or JS/CSS
+function isCleanJson(response) {
+  if (!response || !response.ok || response.redirected) return false;
+  const ct = (response.headers.get("content-type") || "").toLowerCase();
+  return ct.includes("application/json");
+}
+
+function isCleanShellResponse(response, pathname) {
+  if (!response || !response.ok || response.redirected) return false;
+  const ct = (response.headers.get("content-type") || "").toLowerCase();
+  if (pathname.endsWith(".js") && !ct.includes("javascript")) return false;
+  if (pathname.endsWith(".css") && !ct.includes("css")) return false;
+  if (pathname.endsWith(".webmanifest") && ct.includes("html")) return false;
+  if ((pathname === "/" || pathname === "/index.html") && !ct.includes("html")) return false;
+  return true;
+}
+
+// Install: Precache App Shell, and opportunistically pre-fetch API snapshot
 self.addEventListener("install", (event) => {
   self.skipWaiting();
   event.waitUntil(
-    Promise.all([
-      caches.open(CACHE_SHELL).then((cache) => cache.addAll(SHELL_ASSETS)),
-      caches.open(CACHE_CATALOG).then(async (cache) => {
-        try {
-          const res = await fetch("/api/stations");
-          if (isCleanJson(res)) await cache.put("/api/stations", res);
-        } catch (_) {}
-      }),
-      caches.open(CACHE_TRAINS).then(async (cache) => {
-        try {
-          const res = await fetch("/api/trains");
-          if (isCleanJson(res)) await cache.put("/api/trains", res);
-        } catch (_) {}
-      }),
-    ])
+    (async () => {
+      const shellCache = await caches.open(CACHE_SHELL);
+      await shellCache.addAll(SHELL_ASSETS);
+
+      const apiCache = await caches.open(CACHE_API);
+      await Promise.allSettled([
+        (async () => {
+          try {
+            const res = await fetchWithTimeout("/api/stations");
+            if (isCleanJson(res)) await apiCache.put("/api/stations", res);
+          } catch (_) {}
+        })(),
+        (async () => {
+          try {
+            const res = await fetchWithTimeout("/api/trains");
+            if (isCleanJson(res)) await apiCache.put("/api/trains", res);
+          } catch (_) {}
+        })(),
+      ]);
+    })()
   );
 });
 
@@ -45,178 +77,113 @@ self.addEventListener("message", (event) => {
 
 // Activate: Prune outdated caches
 self.addEventListener("activate", (event) => {
-  const allowed = [CACHE_SHELL, CACHE_CATALOG, CACHE_TRAINS, CACHE_BOARDS];
+  const allowed = [CACHE_SHELL, CACHE_API];
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys
-          .filter((k) => !allowed.includes(k))
-          .map((k) => caches.delete(k))
+    caches
+      .keys()
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((k) => !allowed.includes(k))
+            .map((k) => caches.delete(k))
+        )
       )
-    ).then(() => self.clients.claim())
+      .then(() => self.clients.claim())
   );
 });
 
-// Captive Portal & HTML Splash Protection
-// Subway station Wi-Fi often returns HTTP 200 with HTML login page instead of JSON
-function isCleanJson(response) {
-  if (!response || !response.ok || response.redirected) return false;
-  const ct = response.headers.get("content-type") || "";
-  return ct.toLowerCase().includes("application/json");
-}
+// Unified API Handler: Network-First with Lie-Fi Timeout and Cache Fallback
+async function networkFirstApi(request, canonicalPath) {
+  const cache = await caches.open(CACHE_API);
+  const cachedRes = await cache.match(canonicalPath);
 
-// Canonicalize /api/board URLs so query param ordering differences don't miss cache
-function canonicalizeBoardUrl(url) {
-  const u = new URL(url);
-  const st = u.searchParams.get("station") || "127";
-  const rt = u.searchParams.get("route") || "";
-  const canonical = new URL(u.origin + u.pathname);
-  canonical.searchParams.set("station", st);
-  if (rt) canonical.searchParams.set("route", rt);
-  return canonical.toString();
-}
-
-async function networkFirstWithTimeout(request, cacheName, timeoutMs = 3000, isBoard = false) {
-  const cacheKey = isBoard ? canonicalizeBoardUrl(request.url) : request;
-  const cache = await caches.open(cacheName);
-  const cachedRes = await cache.match(cacheKey);
-
-  // If phone is in Airplane Mode, return cached response immediately without blocking for 3s
-  if (typeof navigator !== "undefined" && navigator.onLine === false) {
-    if (cachedRes) return cachedRes;
-    return new Response(
-      JSON.stringify({ offline: true, error: "Subway network unavailable" }),
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      }
-    );
+  if (typeof navigator !== "undefined" && navigator.onLine === false && cachedRes) {
+    return cachedRes;
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const netRes = await fetchWithTimeout(request, API_TIMEOUT_MS);
+    if (isCleanJson(netRes)) {
+      await cache.put(canonicalPath, netRes.clone());
+      return netRes;
+    }
+  } catch (_) {
+    // Timeout or network error in tunnel -> fall through to cached/offline response
+  }
+
+  if (cachedRes) return cachedRes;
+  return new Response(
+    JSON.stringify({ offline: true, error: "Subway network unavailable" }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+}
+
+// Unified App Shell Handler: Cache-First with Background Revalidation
+async function cacheFirstShell(request, cacheKey) {
+  const cache = await caches.open(CACHE_SHELL);
+  let cached = await cache.match(cacheKey);
+  if (!cached && (cacheKey === "/" || cacheKey === "/index.html")) {
+    cached = (await cache.match("/")) || (await cache.match("/index.html"));
+  }
+
+  if (cached) {
+    if (typeof navigator !== "undefined" && navigator.onLine) {
+      fetchWithTimeout(request, API_TIMEOUT_MS)
+        .then((res) => {
+          if (isCleanShellResponse(res, cacheKey)) {
+            cache.put(cacheKey, res.clone());
+          }
+        })
+        .catch(() => {});
+    }
+    return cached;
+  }
 
   try {
-    const netRes = await fetch(request, { signal: controller.signal });
-    clearTimeout(timer);
-    if (isCleanJson(netRes)) {
-      if (isBoard) {
-        await enforceLruQuota(cache, MAX_CACHED_BOARDS);
-      }
+    const netRes = await fetchWithTimeout(request, API_TIMEOUT_MS);
+    if (isCleanShellResponse(netRes, cacheKey)) {
       await cache.put(cacheKey, netRes.clone());
       return netRes;
     }
-    // If captive portal HTML was returned, fall back to clean cached JSON
-    if (cachedRes) return cachedRes;
-    return netRes;
-  } catch (_) {
-    clearTimeout(timer);
-    // Timeout or network error in tunnel -> return cached response
-    if (cachedRes) return cachedRes;
-    return new Response(
-      JSON.stringify({ offline: true, error: "Subway network unavailable" }),
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      }
-    );
-  }
-}
+  } catch (_) {}
 
-async function enforceLruQuota(cache, maxItems) {
-  const keys = await cache.keys();
-  if (keys.length >= maxItems) {
-    // Delete oldest entry
-    await cache.delete(keys[0]);
-  }
+  return (
+    cached ||
+    (await cache.match("/")) ||
+    (await cache.match("/index.html")) ||
+    fetch(request)
+  );
 }
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
-  // Only handle GET requests
   if (event.request.method !== "GET") {
     return;
   }
 
-  // 1. Navigation Requests (e.g. reload or visiting with query params in airplane mode)
-  // ALWAYS return the cached app shell immediately so the browser never shows "Offline" in the URL bar
   if (event.request.mode === "navigate") {
-    event.respondWith(
-      (async () => {
-        const cache = await caches.open(CACHE_SHELL);
-        const cached = (await cache.match("/")) || (await cache.match("/index.html"));
-        if (cached) {
-          if (typeof navigator !== "undefined" && navigator.onLine) {
-            fetch(event.request)
-              .then((res) => {
-                if (res && res.ok) cache.put("/", res.clone());
-              })
-              .catch(() => {});
-          }
-          return cached;
-        }
-        try {
-          return await fetch(event.request);
-        } catch (_) {
-          return (await cache.match("/")) || (await cache.match("/index.html"));
-        }
-      })()
-    );
+    event.respondWith(cacheFirstShell(event.request, "/"));
     return;
   }
 
-  // 2. Station Catalog: Stale-While-Revalidate with Safe Offline Fallback
   if (url.pathname === "/api/stations") {
-    event.respondWith(
-      (async () => {
-        const cache = await caches.open(CACHE_CATALOG);
-        const cached = (await cache.match(event.request)) || (await cache.match("/api/stations"));
-        if (typeof navigator !== "undefined" && navigator.onLine === false && cached) {
-          return cached;
-        }
-        try {
-          const res = await fetch(event.request);
-          if (isCleanJson(res)) {
-            await cache.put(event.request, res.clone());
-            await cache.put("/api/stations", res.clone());
-          }
-          return res;
-        } catch (_) {
-          if (cached) return cached;
-          return new Response(JSON.stringify({ offline: true, stations: [] }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" }
-          });
-        }
-      })()
-    );
+    event.respondWith(networkFirstApi(event.request, "/api/stations"));
     return;
   }
 
-  // 3. System-Wide Trains Snapshot: Network-First (3s Timeout)
   if (url.pathname === "/api/trains") {
-    event.respondWith(networkFirstWithTimeout(event.request, CACHE_TRAINS, 3000, false));
+    event.respondWith(networkFirstApi(event.request, "/api/trains"));
     return;
   }
 
-  // 4. Station Board: Network-First (3s Timeout) with LRU
-  if (url.pathname === "/api/board") {
-    event.respondWith(networkFirstWithTimeout(event.request, CACHE_BOARDS, 3000, true));
-    return;
-  }
-
-  // 5. App Shell Static Assets (css, js, manifest): Cache-First
   if (SHELL_ASSETS.includes(url.pathname)) {
-    event.respondWith(
-      caches.open(CACHE_SHELL).then(async (cache) => {
-        const cached = await cache.match(url.pathname);
-        return cached || fetch(event.request);
-      })
-    );
+    event.respondWith(cacheFirstShell(event.request, url.pathname));
     return;
   }
 
-  // Default passthrough
   event.respondWith(fetch(event.request));
 });
