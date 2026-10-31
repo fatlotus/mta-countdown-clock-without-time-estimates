@@ -95,3 +95,63 @@ func TestServiceStationsAndHighStreetDefault(t *testing.T) {
 		}
 	}
 }
+
+func TestUnifiedSystemTrainsAndProjection(t *testing.T) {
+	staticPath := filepath.Join("..", "..", "data", "mta_static.json")
+	svc, err := NewService(staticPath)
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	// 1. Verify simulation produces rich trains across lines
+	simTrains := svc.simulateSystemTrains()
+	if len(simTrains) < 50 {
+		t.Fatalf("expected at least 50 simulated trains across system, got %d", len(simTrains))
+	}
+
+	// Verify trains have required offline-first fields
+	for _, tr := range simTrains {
+		if tr.TripID == "" || tr.RouteID == "" || tr.Direction == "" || tr.CurrentStopID == "" {
+			t.Errorf("train missing basic identity fields: %+v", tr)
+		}
+		if len(tr.UpcomingStops) == 0 {
+			t.Errorf("train %s has no upcoming stops", tr.TripID)
+		}
+		if tr.UpcomingStops[0].StopID != tr.CurrentStopID {
+			t.Errorf("train %s first upcoming stop %s != current stop %s",
+				tr.TripID, tr.UpcomingStops[0].StopID, tr.CurrentStopID)
+		}
+		if tr.Track == "" || tr.TrackType == "" {
+			t.Errorf("train %s missing track classification: track=%q, trackType=%q", tr.TripID, tr.Track, tr.TrackType)
+		}
+	}
+
+	// 2. Verify projectStationArrivals projects correctly
+	timesSq, ok := svc.GetStation("127")
+	if !ok {
+		t.Fatalf("expected station 127")
+	}
+	allowed := map[string]bool{"1": true, "2": true, "3": true}
+	northArr, southArr := svc.projectStationArrivals(timesSq, allowed, simTrains)
+	if len(northArr) == 0 || len(southArr) == 0 {
+		t.Fatalf("expected arrivals at Times Sq in both directions, got N=%d S=%d", len(northArr), len(southArr))
+	}
+	for _, arr := range append(northArr, southArr...) {
+		if arr.RouteID != "1" && arr.RouteID != "2" && arr.RouteID != "3" {
+			t.Errorf("expected only 1/2/3 trains at Times Sq 7th Ave platform, got %s", arr.RouteID)
+		}
+		if arr.StopsAwayLabel == "" || arr.LocationStatus == "" {
+			t.Errorf("missing stopsAwayLabel or locationStatus: %+v", arr)
+		}
+	}
+
+	// 3. Verify caching behavior in getOrRefreshTrains
+	snap1 := svc.getOrRefreshTrains(context.Background())
+	if snap1 == nil || len(snap1.Trains) == 0 {
+		t.Fatalf("expected non-empty snapshot from getOrRefreshTrains")
+	}
+	snap2 := svc.getOrRefreshTrains(context.Background())
+	if snap1 != snap2 {
+		t.Errorf("expected cached pointer to be returned within 12 seconds")
+	}
+}

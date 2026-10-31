@@ -36,6 +36,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize MTA service: %v", err)
 	}
+	svc.StartBackgroundSync(context.Background(), 10*time.Second)
 
 	mux := http.NewServeMux()
 

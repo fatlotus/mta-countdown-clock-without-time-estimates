@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"os"
 	"sort"
@@ -28,18 +27,6 @@ var allFeeds = []string{
 	"gtfs-si",
 }
 
-var routeToFeed = map[string]string{
-	"A": "gtfs-ace", "C": "gtfs-ace", "E": "gtfs-ace", "H": "gtfs-ace", "FS": "gtfs-ace", "SR": "gtfs-ace",
-	"B": "gtfs-bdfm", "D": "gtfs-bdfm", "F": "gtfs-bdfm", "FX": "gtfs-bdfm", "M": "gtfs-bdfm",
-	"G": "gtfs-g",
-	"J": "gtfs-jz", "Z": "gtfs-jz",
-	"N": "gtfs-nqrw", "Q": "gtfs-nqrw", "R": "gtfs-nqrw", "W": "gtfs-nqrw",
-	"L": "gtfs-l",
-	"1": "gtfs", "2": "gtfs", "3": "gtfs", "4": "gtfs", "5": "gtfs", "6": "gtfs", "6X": "gtfs",
-	"7": "gtfs", "7X": "gtfs", "GS": "gtfs", "S": "gtfs",
-	"SI": "gtfs-si", "SIR": "gtfs-si",
-}
-
 type cachedFeed struct {
 	msg       *gtfs.FeedMessage
 	fetchedAt time.Time
@@ -53,8 +40,10 @@ type Service struct {
 	stopNames  map[string]string
 	httpClient *http.Client
 
-	mu        sync.RWMutex
-	feedCache map[string]cachedFeed
+	mu              sync.RWMutex
+	feedCache       map[string]cachedFeed
+	cachedTrains    *SystemTrainsResponse
+	trainsFetchedAt time.Time
 }
 
 // NewService loads the static MTA station/route JSON and initializes the GTFS-RT service.
@@ -132,38 +121,6 @@ func (s *Service) getRouteInfo(routeID string) RouteInfo {
 		Color:     "#7C858C",
 		TextColor: "#FFFFFF",
 	}
-}
-
-// feedsForStation returns the prioritized list of MTA GTFS-RT feeds to query for a station.
-// Since trains are sometimes rerouted over different lines (e.g., F via A/C or N/Q via R),
-// we fetch the station's primary feeds plus any overlapping division feeds.
-func (s *Service) feedsForStation(st Station) []string {
-	seen := map[string]bool{}
-	var feeds []string
-	add := func(f string) {
-		if f != "" && !seen[f] {
-			seen[f] = true
-			feeds = append(feeds, f)
-		}
-	}
-	for _, r := range st.Routes {
-		add(routeToFeed[r])
-		if r == "S" {
-			add("gtfs")
-			add("gtfs-ace")
-		}
-	}
-	// Include companion B-Division feeds for cross-honored / rerouted trains
-	if seen["gtfs-ace"] || seen["gtfs-bdfm"] || seen["gtfs-nqrw"] || seen["gtfs-g"] {
-		add("gtfs-ace")
-		add("gtfs-bdfm")
-		add("gtfs-nqrw")
-		add("gtfs-g")
-	}
-	if len(feeds) == 0 {
-		return allFeeds
-	}
-	return feeds
 }
 
 func (s *Service) fetchFeed(ctx context.Context, feedName string) (*gtfs.FeedMessage, error) {
@@ -264,113 +221,138 @@ func (s *Service) GetStationBoard(ctx context.Context, stationID string, focusRo
 		LastUpdated: time.Now().UTC().Format(time.RFC3339),
 	}
 
+	var trains []SystemTrain
 	if forceSimulate {
-		s.populateSimulatedTrains(resp)
-		resp.TrackMap = s.buildTrackMap(st, trunkRoutes, nil, true)
-		return resp, nil
+		trains = s.simulateSystemTrains()
+		resp.DataSource = "SIMULATED_FALLBACK"
+		resp.FeedTimestamp = time.Now().Unix()
+	} else {
+		sysSnapshot := s.getOrRefreshTrains(ctx)
+		resp.DataSource = sysSnapshot.DataSource
+		resp.FeedTimestamp = sysSnapshot.FeedTimestamp
+		trains = sysSnapshot.Trains
 	}
 
-	feedsToQuery := s.feedsForStation(st)
-	type feedResult struct {
-		msg *gtfs.FeedMessage
-		err error
-	}
-	results := make([]feedResult, len(feedsToQuery))
-	var wg sync.WaitGroup
-	for i, fn := range feedsToQuery {
-		wg.Add(1)
-		go func(idx int, feedName string) {
-			defer wg.Done()
-			msg, err := s.fetchFeed(ctx, feedName)
-			results[idx] = feedResult{msg: msg, err: err}
-		}(i, fn)
-	}
-	wg.Wait()
+	northTrains, southTrains := s.projectStationArrivals(st, allowedRoutesSet, trains)
+	resp.Northbound.Trains = northTrains
+	resp.Southbound.Trains = southTrains
+	resp.TrackMap.Vehicles = s.projectTrackVehicles(tmap, trains)
 
-	var validFeeds []*gtfs.FeedMessage
-	var latestTS int64
-	for _, r := range results {
-		if r.msg != nil {
-			validFeeds = append(validFeeds, r.msg)
-			ts := int64(r.msg.GetHeader().GetTimestamp())
-			if ts > latestTS {
-				latestTS = ts
-			}
+	if !forceSimulate {
+		if len(northTrains) == 0 && st.NorthLabel != "" {
+			resp.Northbound.ServiceNote = "No active trains currently scheduled for this platform in live MTA feed (possible reroute or off-hours service change)."
+		}
+		if len(southTrains) == 0 && st.SouthLabel != "" {
+			resp.Southbound.ServiceNote = "No active trains currently scheduled for this platform in live MTA feed (possible reroute or off-hours service change)."
 		}
 	}
 
-	if len(validFeeds) == 0 {
-		// Automatic fallback to simulated mode when offline
-		s.populateSimulatedTrains(resp)
-		resp.TrackMap = s.buildTrackMap(st, trunkRoutes, nil, true)
-		return resp, nil
-	}
+	return resp, nil
+}
 
-	resp.DataSource = "LIVE_MTA_GTFS_RT"
-	resp.FeedTimestamp = latestTS
-
-	targetN := st.ID + "N"
-	targetS := st.ID + "S"
-
+// projectStationArrivals projects system trains into arrivals at a target station,
+// filtered to allowed routes and sorted by proximity and arrival time.
+func (s *Service) projectStationArrivals(st Station, allowedRoutesSet map[string]bool, trains []SystemTrain) ([]TrainArrival, []TrainArrival) {
 	northTrains := []TrainArrival{}
 	southTrains := []TrainArrival{}
-	seenTrips := map[string]bool{}
 
-	for _, feed := range validFeeds {
-		feedTS := int64(feed.GetHeader().GetTimestamp())
-		if feedTS == 0 {
-			feedTS = time.Now().Unix()
+	for _, tr := range trains {
+		if len(allowedRoutesSet) > 0 && !allowedRoutesSet[tr.RouteID] && !allowedRoutesSet[s.normalizeRouteID(tr.RouteID)] {
+			continue
 		}
 
-		vehMap := make(map[string]*gtfs.VehiclePosition)
-		for _, entity := range feed.GetEntity() {
-			if v := entity.GetVehicle(); v != nil && v.GetTrip().GetTripId() != "" {
-				vehMap[v.GetTrip().GetTripId()] = v
-			}
-		}
-
-		for _, entity := range feed.GetEntity() {
-			tu := entity.GetTripUpdate()
-			if tu == nil {
-				continue
-			}
-			routeID := tu.GetTrip().GetRouteId()
-			// Filter to only the active corridor routes for this station/line view
-			if len(allowedRoutesSet) > 0 && !allowedRoutesSet[routeID] && !allowedRoutesSet[s.normalizeRouteID(routeID)] {
-				continue
-			}
-			tripID := tu.GetTrip().GetTripId()
-			if seenTrips[tripID] {
-				continue
-			}
-
-			stus := tu.GetStopTimeUpdate()
-			if len(stus) == 0 {
-				continue
-			}
-
-			for i, stu := range stus {
-				stopID := stu.GetStopId()
-				if stopID != targetN && stopID != targetS {
-					continue
-				}
-				dir := "N"
-				if stopID == targetS {
-					dir = "S"
-				}
-
-				arr, ok := s.resolveTrainArrival(st, dir, i, tu, vehMap[tripID], feedTS)
-				if !ok {
-					continue
-				}
-				seenTrips[tripID] = true
-				if dir == "N" {
-					northTrains = append(northTrains, arr)
-				} else {
-					southTrains = append(southTrains, arr)
-				}
+		targetIdx := -1
+		for idx, us := range tr.UpcomingStops {
+			if us.StopID == st.ID {
+				targetIdx = idx
 				break
 			}
+		}
+		if targetIdx == -1 {
+			continue
+		}
+
+		targetStop := tr.UpcomingStops[targetIdx]
+		stopsAway := targetIdx
+		var statusType, locationStatus, stopsAwayLabel string
+
+		if stopsAway == 0 {
+			if tr.StatusType == "AT_STATION" {
+				locationStatus = fmt.Sprintf("At %s (Boarding in Station)", st.Name)
+				statusType = "AT_TARGET"
+				stopsAwayLabel = "In Station"
+			} else {
+				locationStatus = fmt.Sprintf("Approaching %s", st.Name)
+				statusType = "APPROACHING"
+				stopsAwayLabel = "Entering Station"
+			}
+		} else {
+			statusType = tr.StatusType
+			locationStatus = tr.LocationStatus
+			if stopsAway == 1 {
+				stopsAwayLabel = "1 stop away"
+			} else {
+				stopsAwayLabel = fmt.Sprintf("%d stops away", stopsAway)
+			}
+		}
+
+		var recentPath []string
+		var recentStopIDs []string
+		startIdx := 0
+		if targetIdx > 4 {
+			startIdx = targetIdx - 4
+		}
+		if startIdx > 0 {
+			recentPath = append(recentPath, tr.CurrentStop, "...")
+			recentStopIDs = append(recentStopIDs, tr.CurrentStopID, "")
+		}
+		for k := startIdx; k <= targetIdx; k++ {
+			sid := tr.UpcomingStops[k].StopID
+			sname := s.stopNames[sid]
+			if sname == "" {
+				sname = sid
+			}
+			recentPath = append(recentPath, sname)
+			recentStopIDs = append(recentStopIDs, sid)
+		}
+
+		arrTrack := targetStop.Track
+		if arrTrack == "" {
+			arrTrack = tr.Track
+		}
+
+		targetTime := targetStop.ArrivalTime
+		if targetTime == 0 {
+			targetTime = time.Now().Unix() + int64(stopsAway)*90
+		}
+
+		arr := TrainArrival{
+			TripID:            tr.TripID,
+			RouteID:           tr.RouteID,
+			RouteShortName:    tr.RouteShortName,
+			RouteColor:        tr.RouteColor,
+			RouteTextColor:    tr.RouteTextColor,
+			Direction:         tr.Direction,
+			Destination:       tr.Destination,
+			DestinationStopID: tr.DestinationStopID,
+			LocationStatus:    locationStatus,
+			StatusType:        statusType,
+			CurrentStopID:     tr.CurrentStopID,
+			CurrentStop:       tr.CurrentStop,
+			PreviousStopID:    tr.PreviousStopID,
+			PreviousStop:      tr.PreviousStop,
+			StopsAway:         stopsAway,
+			StopsAwayLabel:    stopsAwayLabel,
+			Track:             arrTrack,
+			RecentPath:        recentPath,
+			RecentStopIDs:     recentStopIDs,
+			SortOrder:         targetTime,
+		}
+
+		if tr.Direction == "N" {
+			northTrains = append(northTrains, arr)
+		} else {
+			southTrains = append(southTrains, arr)
 		}
 	}
 
@@ -394,430 +376,48 @@ func (s *Service) GetStationBoard(ctx context.Context, stationID string, focusRo
 		southTrains = southTrains[:8]
 	}
 
-	resp.Northbound.Trains = northTrains
-	resp.Southbound.Trains = southTrains
-
-	if len(northTrains) == 0 && st.NorthLabel != "" {
-		resp.Northbound.ServiceNote = "No active trains currently scheduled for this platform in live MTA feed (possible reroute or off-hours service change)."
-	}
-	if len(southTrains) == 0 && st.SouthLabel != "" {
-		resp.Southbound.ServiceNote = "No active trains currently scheduled for this platform in live MTA feed (possible reroute or off-hours service change)."
-	}
-
-	resp.TrackMap = s.buildTrackMap(st, trunkRoutes, validFeeds, false)
-
-	return resp, nil
+	return northTrains, southTrains
 }
 
-func (s *Service) resolveTrainArrival(
-	targetStation Station,
-	dir string,
-	targetIdx int,
-	tu *gtfs.TripUpdate,
-	veh *gtfs.VehiclePosition,
-	feedTS int64,
-) (TrainArrival, bool) {
-	stus := tu.GetStopTimeUpdate()
-	targetSTU := stus[targetIdx]
-	targetTime := targetSTU.GetArrival().GetTime()
-	if targetTime == 0 {
-		targetTime = targetSTU.GetDeparture().GetTime()
-	}
-	// Ignore trains that already left the target station more than 45 seconds ago
-	if targetTime > 0 && targetTime < feedTS-45 {
-		return TrainArrival{}, false
-	}
-
-	// Determine the train's current stop index in stus (first stop not yet departed)
-	currIdx := -1
-	for i, stu := range stus {
-		t := stu.GetDeparture().GetTime()
-		if t == 0 {
-			t = stu.GetArrival().GetTime()
-		}
-		if t == 0 || t >= feedTS-25 {
-			currIdx = i
-			break
-		}
-	}
-	if currIdx == -1 || currIdx > targetIdx {
-		return TrainArrival{}, false
-	}
-
-	// Ignore unstarted future trips still sitting at the origin terminal > 22 minutes before departure
-	if currIdx == 0 && targetIdx > 0 {
-		firstTime := stus[0].GetDeparture().GetTime()
-		if firstTime == 0 {
-			firstTime = stus[0].GetArrival().GetTime()
-		}
-		if firstTime-feedTS > 900 {
-			return TrainArrival{}, false
-		}
-	}
-
-	stopsAway := targetIdx - currIdx
-	currStopID := CleanStopID(stus[currIdx].GetStopId())
-	currStopName := s.stopNames[currStopID]
-	if currStopName == "" {
-		currStopName = currStopID
-	}
-
-	termStopID := CleanStopID(stus[len(stus)-1].GetStopId())
-	destName := s.stopNames[termStopID]
-	if destName == "" {
-		destName = termStopID
-	}
-
-	routeID := tu.GetTrip().GetRouteId()
-	rInfo := s.getRouteInfo(routeID)
-
-	// Find previous stop ID and name from STUs, VehiclePosition, or canonical stop sequence
-	prevStopID := ""
-	prevStopName := ""
-	if currIdx > 0 {
-		prevID := CleanStopID(stus[currIdx-1].GetStopId())
-		if s.stopNames[prevID] != "" {
-			prevStopID = prevID
-			prevStopName = s.stopNames[prevID]
-		}
-	}
-	if prevStopName == "" && veh != nil {
-		vpStopID := CleanStopID(veh.GetStopId())
-		if vpStopID != "" && vpStopID != currStopID && s.stopNames[vpStopID] != "" {
-			prevStopID = vpStopID
-			prevStopName = s.stopNames[vpStopID]
-		}
-	}
-	if prevStopName == "" {
-		seq := s.static.CanonicalSequences[routeID+"_"+dir]
-		for idx, sid := range seq {
-			if sid == currStopID && idx > 0 {
-				prevStopID = seq[idx-1]
-				prevStopName = s.stopNames[prevStopID]
-				break
-			}
-		}
-	}
-
-	arrTime := stus[currIdx].GetArrival().GetTime()
-	depTime := stus[currIdx].GetDeparture().GetTime()
-	if arrTime == 0 {
-		arrTime = depTime
-	}
-	if depTime == 0 {
-		depTime = arrTime
-	}
-	arrDiff := arrTime - feedTS
-	depDiff := depTime - feedTS
-
-	vehAtCurr := veh != nil && CleanStopID(veh.GetStopId()) == currStopID
-	var locationStatus, statusType string
-
-	if stopsAway == 0 {
-		if (vehAtCurr && veh.GetCurrentStatus() == gtfs.VehiclePosition_STOPPED_AT) || (arrDiff <= 15 && depDiff >= -30) {
-			locationStatus = fmt.Sprintf("At %s (Boarding in Station)", targetStation.Name)
-			statusType = "AT_TARGET"
-		} else if arrDiff <= 50 {
-			locationStatus = fmt.Sprintf("Approaching %s", targetStation.Name)
-			statusType = "APPROACHING"
-		} else if prevStopName != "" && prevStopName != targetStation.Name {
-			locationStatus = fmt.Sprintf("Between %s & %s", prevStopName, targetStation.Name)
-			statusType = "BETWEEN"
-		} else {
-			locationStatus = fmt.Sprintf("Approaching %s", targetStation.Name)
-			statusType = "APPROACHING"
-		}
-	} else {
-		if (vehAtCurr && veh.GetCurrentStatus() == gtfs.VehiclePosition_STOPPED_AT) || (arrDiff <= 15 && depDiff >= -25) {
-			locationStatus = fmt.Sprintf("At %s", currStopName)
-			statusType = "AT_STATION"
-		} else if (vehAtCurr && veh.GetCurrentStatus() == gtfs.VehiclePosition_INCOMING_AT) || (arrDiff > 15 && arrDiff <= 45) {
-			locationStatus = fmt.Sprintf("Approaching %s", currStopName)
-			statusType = "APPROACHING"
-		} else if prevStopName != "" && prevStopName != currStopName {
-			locationStatus = fmt.Sprintf("Between %s & %s", prevStopName, currStopName)
-			statusType = "BETWEEN"
-		} else {
-			locationStatus = fmt.Sprintf("Approaching %s", currStopName)
-			statusType = "APPROACHING"
-		}
-	}
-
-	var stopsAwayLabel string
-	switch stopsAway {
-	case 0:
-		if statusType == "AT_TARGET" {
-			stopsAwayLabel = "In Station"
-		} else {
-			stopsAwayLabel = "Entering Station"
-		}
-	case 1:
-		stopsAwayLabel = "1 stop away"
-	default:
-		stopsAwayLabel = fmt.Sprintf("%d stops away", stopsAway)
-	}
-
-	// Build a recent path snippet (from current stop up to target station, max 6 stops) for UI strip diagram
-	var recentPath []string
-	var recentStopIDs []string
-	startIdx := currIdx
-	if targetIdx-startIdx > 4 {
-		startIdx = targetIdx - 4
-	}
-	if currIdx < startIdx {
-		recentPath = append(recentPath, currStopName, "...")
-		recentStopIDs = append(recentStopIDs, currStopID, "")
-	}
-	for k := startIdx; k <= targetIdx; k++ {
-		sid := CleanStopID(stus[k].GetStopId())
-		sname := s.stopNames[sid]
-		if sname != "" {
-			recentPath = append(recentPath, sname)
-			recentStopIDs = append(recentStopIDs, sid)
-		}
-	}
-
-	targetTrackInfo := ExtractNyctTrackInfo(targetSTU)
-	currTrackInfo := ExtractNyctTrackInfo(stus[currIdx])
-	arrTrack := targetTrackInfo.ActualTrack
-	if arrTrack == "" {
-		arrTrack = currTrackInfo.ActualTrack
-	}
-	if arrTrack == "" {
-		arrTrack = targetTrackInfo.ScheduledTrack
-	}
-	if arrTrack == "" {
-		arrTrack = currTrackInfo.ScheduledTrack
-	}
-
-	return TrainArrival{
-		TripID:            tu.GetTrip().GetTripId(),
-		RouteID:           routeID,
-		RouteShortName:    rInfo.ShortName,
-		RouteColor:        rInfo.Color,
-		RouteTextColor:    rInfo.TextColor,
-		Direction:         dir,
-		Destination:       destName,
-		DestinationStopID: termStopID,
-		LocationStatus:    locationStatus,
-		StatusType:        statusType,
-		CurrentStopID:     currStopID,
-		CurrentStop:       currStopName,
-		PreviousStopID:    prevStopID,
-		PreviousStop:      prevStopName,
-		StopsAway:         stopsAway,
-		StopsAwayLabel:    stopsAwayLabel,
-		Track:             arrTrack,
-		RecentPath:        recentPath,
-		RecentStopIDs:     recentStopIDs,
-		SortOrder:         targetTime,
-	}, true
-}
-
-// populateSimulatedTrains synthesizes realistic train positions along the station's canonical GTFS sequences
-// when offline or when the user toggles Simulation Mode.
-func (s *Service) populateSimulatedTrains(resp *StationBoardResponse) {
-	resp.DataSource = "SIMULATED_FALLBACK"
-	resp.FeedTimestamp = time.Now().Unix()
-
-	st := resp.Station
-	routes := resp.ActiveRoutes
-	if len(routes) == 0 {
-		routes = st.Routes
-	}
-	if len(routes) == 0 {
-		routes = []string{"A", "C"}
-	}
-
-	// Deterministic time-stepped seed so simulated trains advance smoothly every 20 seconds
-	timeBucket := time.Now().Unix() / 20
-
-	buildDir := func(dir string) []TrainArrival {
-		var arrivals []TrainArrival
-		offsets := []int{0, 2, 4, 7, 11, 15}
-		for i, baseOffset := range offsets {
-			routeID := routes[i%len(routes)]
-			rInfo := s.getRouteInfo(routeID)
-			seq := s.static.CanonicalSequences[routeID+"_"+dir]
-			if len(seq) == 0 {
-				// Try alternate shuttle route IDs
-				for _, alt := range []string{"GS", "FS", "H", "SI"} {
-					if len(s.static.CanonicalSequences[alt+"_"+dir]) > 0 {
-						seq = s.static.CanonicalSequences[alt+"_"+dir]
-						break
-					}
-				}
-			}
-			if len(seq) == 0 {
-				continue
-			}
-
-			targetIdx := -1
-			for idx, sid := range seq {
-				if sid == st.ID {
-					targetIdx = idx
-					break
-				}
-			}
-			if targetIdx <= 0 {
-				continue
-			}
-
-			// Animate train position based on timeBucket
-			shift := int((timeBucket + int64(i)) % 2)
-			stopsAway := baseOffset - shift
-			if stopsAway < 0 {
-				stopsAway = 0
-			}
-			currIdx := targetIdx - stopsAway
-			if currIdx < 0 {
-				currIdx = 0
-				stopsAway = targetIdx
-			}
-
-			currStopID := seq[currIdx]
-			currStopName := s.stopNames[currStopID]
-			prevStopID := ""
-			prevStopName := ""
-			if currIdx > 0 {
-				prevStopID = seq[currIdx-1]
-				prevStopName = s.stopNames[prevStopID]
-			}
-			destStopID := seq[len(seq)-1]
-			destName := s.stopNames[destStopID]
-
-			rng := rand.New(rand.NewSource(timeBucket + int64(i*31) + int64(dir[0])))
-			phase := rng.Intn(3)
-
-			var locationStatus, statusType, stopsAwayLabel string
-			if stopsAway == 0 {
-				if phase == 0 {
-					locationStatus = fmt.Sprintf("At %s (Boarding in Station)", st.Name)
-					statusType = "AT_TARGET"
-					stopsAwayLabel = "In Station"
-				} else {
-					locationStatus = fmt.Sprintf("Approaching %s", st.Name)
-					statusType = "APPROACHING"
-					stopsAwayLabel = "Entering Station"
-				}
-			} else {
-				if phase == 0 || prevStopName == "" {
-					locationStatus = fmt.Sprintf("At %s", currStopName)
-					statusType = "AT_STATION"
-				} else if phase == 1 {
-					locationStatus = fmt.Sprintf("Between %s & %s", prevStopName, currStopName)
-					statusType = "BETWEEN"
-				} else {
-					locationStatus = fmt.Sprintf("Approaching %s", currStopName)
-					statusType = "APPROACHING"
-				}
-				if stopsAway == 1 {
-					stopsAwayLabel = "1 stop away"
-				} else {
-					stopsAwayLabel = fmt.Sprintf("%d stops away", stopsAway)
-				}
-			}
-
-			var recentPath []string
-			var recentStopIDs []string
-			startIdx := currIdx
-			if targetIdx-startIdx > 4 {
-				startIdx = targetIdx - 4
-			}
-			if currIdx < startIdx {
-				recentPath = append(recentPath, currStopName, "...")
-				recentStopIDs = append(recentStopIDs, currStopID, "")
-			}
-			for k := startIdx; k <= targetIdx; k++ {
-				recentPath = append(recentPath, s.stopNames[seq[k]])
-				recentStopIDs = append(recentStopIDs, seq[k])
-			}
-
-			arrivals = append(arrivals, TrainArrival{
-				TripID:            fmt.Sprintf("SIM_%s_%s_%d", routeID, dir, i),
-				RouteID:           routeID,
-				RouteShortName:    rInfo.ShortName,
-				RouteColor:        rInfo.Color,
-				RouteTextColor:    rInfo.TextColor,
-				Direction:         dir,
-				Destination:       destName,
-				DestinationStopID: destStopID,
-				LocationStatus:    locationStatus,
-				StatusType:        statusType,
-				CurrentStopID:     currStopID,
-				CurrentStop:       currStopName,
-				PreviousStopID:    prevStopID,
-				PreviousStop:      prevStopName,
-				StopsAway:         stopsAway,
-				StopsAwayLabel:    stopsAwayLabel,
-				RecentPath:        recentPath,
-				RecentStopIDs:     recentStopIDs,
-			})
-		}
-		return arrivals
-	}
-
-	if st.NorthLabel != "" {
-		resp.Northbound.Trains = buildDir("N")
-	}
-	if st.SouthLabel != "" {
-		resp.Southbound.Trains = buildDir("S")
-	}
-}
-
-// GetAllTrains fetches all 8 GTFS-RT feeds and returns a system-wide snapshot of all active trains.
-func (s *Service) GetAllTrains(ctx context.Context) (*SystemTrainsResponse, error) {
-	type feedResult struct {
-		msg *gtfs.FeedMessage
-		err error
-	}
-	results := make([]feedResult, len(allFeeds))
-	var wg sync.WaitGroup
-	for i, fn := range allFeeds {
-		wg.Add(1)
-		go func(idx int, feedName string) {
-			defer wg.Done()
-			msg, err := s.fetchFeed(ctx, feedName)
-			results[idx] = feedResult{msg: msg, err: err}
-		}(i, fn)
-	}
-	wg.Wait()
-
-	var validFeeds []*gtfs.FeedMessage
+// parseFeedsToTrains parses GTFS-RT feed messages into a unified slice of SystemTrain.
+func (s *Service) parseFeedsToTrains(validFeeds []*gtfs.FeedMessage) ([]SystemTrain, int64) {
 	var latestTS int64
-	for _, r := range results {
-		if r.msg != nil {
-			validFeeds = append(validFeeds, r.msg)
-			ts := int64(r.msg.GetHeader().GetTimestamp())
+	for _, feed := range validFeeds {
+		if feed != nil && feed.Header != nil && feed.Header.Timestamp != nil {
+			ts := int64(feed.Header.GetTimestamp())
 			if ts > latestTS {
 				latestTS = ts
 			}
 		}
 	}
-
-	resp := &SystemTrainsResponse{
-		LastUpdated: time.Now().UTC().Format(time.RFC3339),
-		Trains:      []SystemTrain{},
+	if latestTS == 0 {
+		latestTS = time.Now().Unix()
 	}
 
-	if len(validFeeds) == 0 {
-		resp.DataSource = "SIMULATED_FALLBACK"
-		resp.FeedTimestamp = time.Now().Unix()
-		resp.Trains = s.generateSimulatedSystemTrains()
-		return resp, nil
-	}
-
-	resp.DataSource = "LIVE_MTA_GTFS_RT"
-	resp.FeedTimestamp = latestTS
-	if resp.FeedTimestamp == 0 {
-		resp.FeedTimestamp = time.Now().Unix()
-	}
-
-	seenTrips := make(map[string]bool)
+	vehMap := make(map[string]*gtfs.VehiclePosition)
 	for _, feed := range validFeeds {
+		if feed == nil {
+			continue
+		}
+		for _, entity := range feed.GetEntity() {
+			if veh := entity.GetVehicle(); veh != nil {
+				if trip := veh.GetTrip(); trip != nil && trip.GetTripId() != "" {
+					vehMap[trip.GetTripId()] = veh
+				}
+			}
+		}
+	}
+
+	var trains []SystemTrain
+	seenTrips := make(map[string]bool)
+
+	for _, feed := range validFeeds {
+		if feed == nil {
+			continue
+		}
 		feedTS := int64(feed.GetHeader().GetTimestamp())
 		if feedTS == 0 {
-			feedTS = time.Now().Unix()
+			feedTS = latestTS
 		}
 
 		for _, entity := range feed.GetEntity() {
@@ -825,11 +425,17 @@ func (s *Service) GetAllTrains(ctx context.Context) (*SystemTrainsResponse, erro
 			if tu == nil {
 				continue
 			}
-			tripID := tu.GetTrip().GetTripId()
+			trip := tu.GetTrip()
+			if trip == nil {
+				continue
+			}
+			tripID := trip.GetTripId()
 			if tripID == "" || seenTrips[tripID] {
 				continue
 			}
-			routeID := tu.GetTrip().GetRouteId()
+			seenTrips[tripID] = true
+
+			routeID := trip.GetRouteId()
 			stus := tu.GetStopTimeUpdate()
 			if len(stus) == 0 {
 				continue
@@ -849,26 +455,54 @@ func (s *Service) GetAllTrains(ctx context.Context) (*SystemTrainsResponse, erro
 			if currIdx == -1 {
 				continue
 			}
+			if currIdx == 0 {
+				firstTime := stus[0].GetDeparture().GetTime()
+				if firstTime == 0 {
+					firstTime = stus[0].GetArrival().GetTime()
+				}
+				if firstTime > 0 && firstTime-feedTS > 600 {
+					continue
+				}
+			}
 
 			currStopRaw := stus[currIdx].GetStopId()
 			currStopID := CleanStopID(currStopRaw)
-			dir := "S"
-			if strings.HasSuffix(currStopRaw, "N") {
-				dir = "N"
-			}
-
-			termStopID := CleanStopID(stus[len(stus)-1].GetStopId())
-			destName := s.stopNames[termStopID]
-			if destName == "" {
-				destName = termStopID
-			}
-
 			currStopName := s.stopNames[currStopID]
 			if currStopName == "" {
 				currStopName = currStopID
 			}
 
+			dir := ""
+			if strings.HasSuffix(currStopRaw, "N") {
+				dir = "N"
+			} else if strings.HasSuffix(currStopRaw, "S") {
+				dir = "S"
+			}
+			if dir == "" {
+				if currIdx+1 < len(stus) {
+					nextStopID := CleanStopID(stus[currIdx+1].GetStopId())
+					seqN := s.static.CanonicalSequences[routeID+"_N"]
+					for idx, sid := range seqN {
+						if sid == currStopID && idx+1 < len(seqN) && seqN[idx+1] == nextStopID {
+							dir = "N"
+							break
+						}
+					}
+				}
+				if dir == "" {
+					dir = "S"
+				}
+			}
+
+			destStopRaw := stus[len(stus)-1].GetStopId()
+			destStopID := CleanStopID(destStopRaw)
+			destName := s.stopNames[destStopID]
+			if destName == "" {
+				destName = destStopID
+			}
+
 			rInfo := s.getRouteInfo(routeID)
+			veh := vehMap[tripID]
 
 			prevStopID := ""
 			prevStopName := ""
@@ -879,75 +513,94 @@ func (s *Service) GetAllTrains(ctx context.Context) (*SystemTrainsResponse, erro
 					prevStopName = s.stopNames[prevID]
 				}
 			}
-
-			var upcoming []string
-			var upcomingStops []UpcomingStop
-			for k := currIdx; k < len(stus); k++ {
-				sid := CleanStopID(stus[k].GetStopId())
-				if sid != "" {
-					upcoming = append(upcoming, sid)
-					tInfo := ExtractNyctTrackInfo(stus[k])
-					trackVal := tInfo.ActualTrack
-					if trackVal == "" {
-						trackVal = tInfo.ScheduledTrack
+			if prevStopName == "" && veh != nil {
+				vpStopID := CleanStopID(veh.GetStopId())
+				if vpStopID != "" && vpStopID != currStopID && s.stopNames[vpStopID] != "" {
+					prevStopID = vpStopID
+					prevStopName = s.stopNames[vpStopID]
+				}
+			}
+			if prevStopName == "" {
+				seq := s.static.CanonicalSequences[routeID+"_"+dir]
+				for idx, sid := range seq {
+					if sid == currStopID && idx > 0 {
+						prevStopID = seq[idx-1]
+						prevStopName = s.stopNames[prevStopID]
+						break
 					}
-					aTime := stus[k].GetArrival().GetTime()
-					if aTime == 0 {
-						aTime = stus[k].GetDeparture().GetTime()
-					}
-					upcomingStops = append(upcomingStops, UpcomingStop{
-						StopID:      sid,
-						ArrivalTime: aTime,
-						Track:       trackVal,
-					})
 				}
 			}
 
-			statusType := "APPROACHING"
-			arrTime := stus[currIdx].GetArrival().GetTime()
-			if arrTime == 0 {
-				arrTime = stus[currIdx].GetDeparture().GetTime()
+			currTrackInfo := ExtractNyctTrackInfo(stus[currIdx])
+			var nextTrackInfo NyctTrackInfo
+			if currIdx+1 < len(stus) {
+				nextTrackInfo = ExtractNyctTrackInfo(stus[currIdx+1])
 			}
+			reportedTrack := currTrackInfo.ActualTrack
+			if reportedTrack == "" {
+				reportedTrack = nextTrackInfo.ActualTrack
+			}
+			if reportedTrack == "" {
+				reportedTrack = currTrackInfo.ScheduledTrack
+			}
+			if reportedTrack == "" {
+				reportedTrack = nextTrackInfo.ScheduledTrack
+			}
+			trackType := ClassifyTrackType(reportedTrack, routeID)
+
+			arrTime := stus[currIdx].GetArrival().GetTime()
 			depTime := stus[currIdx].GetDeparture().GetTime()
+			if arrTime == 0 {
+				arrTime = depTime
+			}
 			if depTime == 0 {
 				depTime = arrTime
 			}
-			arrDiff := int64(0)
-			if arrTime > 0 {
-				arrDiff = arrTime - feedTS
-			}
-			depDiff := int64(0)
-			if depTime > 0 {
-				depDiff = depTime - feedTS
-			}
-			if arrTime > 0 && (arrTime-feedTS) <= 15 && (feedTS-arrTime) <= 45 {
+			arrDiff := arrTime - feedTS
+			depDiff := depTime - feedTS
+
+			vehAtCurr := veh != nil && CleanStopID(veh.GetStopId()) == currStopID
+			var statusType, locationStatus string
+
+			if (vehAtCurr && veh.GetCurrentStatus() == gtfs.VehiclePosition_STOPPED_AT) || (arrDiff <= 15 && depDiff >= -25) {
 				statusType = "AT_STATION"
-			} else if prevStopID != "" && (arrTime-feedTS) > 40 {
+				locationStatus = fmt.Sprintf("At %s", currStopName)
+			} else if (vehAtCurr && veh.GetCurrentStatus() == gtfs.VehiclePosition_INCOMING_AT) || (arrDiff > 15 && arrDiff <= 45) {
+				statusType = "APPROACHING"
+				locationStatus = fmt.Sprintf("Approaching %s", currStopName)
+			} else if prevStopName != "" && prevStopName != currStopName {
 				statusType = "BETWEEN"
+				locationStatus = fmt.Sprintf("Between %s & %s", prevStopName, currStopName)
+			} else {
+				statusType = "APPROACHING"
+				locationStatus = fmt.Sprintf("Approaching %s", currStopName)
 			}
 
-			var trackType string
-			var currTrack string
-			if currIdx < len(stus) {
-				tInfo := ExtractNyctTrackInfo(stus[currIdx])
-				currTrack = tInfo.ActualTrack
-				if currTrack == "" {
-					currTrack = tInfo.ScheduledTrack
+			var upcomingStopIDs []string
+			var upcomingStops []UpcomingStop
+			for k := currIdx; k < len(stus); k++ {
+				sid := CleanStopID(stus[k].GetStopId())
+				arrT := stus[k].GetArrival().GetTime()
+				if arrT == 0 {
+					arrT = stus[k].GetDeparture().GetTime()
 				}
-				if currTrack != "" {
-					trackType = ClassifyTrackType(currTrack, routeID)
+				ti := ExtractNyctTrackInfo(stus[k])
+				stTrack := ti.ActualTrack
+				if stTrack == "" {
+					stTrack = ti.ScheduledTrack
 				}
+				if stTrack == "" {
+					stTrack = reportedTrack
+				}
+				upcomingStopIDs = append(upcomingStopIDs, sid)
+				upcomingStops = append(upcomingStops, UpcomingStop{
+					StopID:      sid,
+					ArrivalTime: arrT,
+					Track:       stTrack,
+				})
 			}
 
-			locationStatus := "Approaching " + currStopName
-			if statusType == "AT_STATION" {
-				locationStatus = "At " + currStopName
-			} else if statusType == "BETWEEN" && prevStopName != "" {
-				locationStatus = "Between " + prevStopName + " & " + currStopName
-			}
-
-			seenTrips[tripID] = true
-			resp.Trains = append(resp.Trains, SystemTrain{
+			trains = append(trains, SystemTrain{
 				TripID:            tripID,
 				RouteID:           routeID,
 				RouteShortName:    rInfo.ShortName,
@@ -955,35 +608,42 @@ func (s *Service) GetAllTrains(ctx context.Context) (*SystemTrainsResponse, erro
 				RouteTextColor:    rInfo.TextColor,
 				Direction:         dir,
 				Destination:       destName,
-				DestinationStopID: termStopID,
+				DestinationStopID: destStopID,
 				StatusType:        statusType,
+				LocationStatus:    locationStatus,
 				CurrentStopID:     currStopID,
 				CurrentStop:       currStopName,
 				PreviousStopID:    prevStopID,
 				PreviousStop:      prevStopName,
-				UpcomingStopIDs:   upcoming,
-				Track:             currTrack,
+				UpcomingStopIDs:   upcomingStopIDs,
+				UpcomingStops:     upcomingStops,
+				Track:             reportedTrack,
 				TrackType:         trackType,
-				LocationStatus:    locationStatus,
 				ArrDiff:           arrDiff,
 				DepDiff:           depDiff,
-				UpcomingStops:     upcomingStops,
 			})
 		}
 	}
 
-	return resp, nil
+	return trains, latestTS
 }
 
-func (s *Service) generateSimulatedSystemTrains() []SystemTrain {
+// simulateSystemTrains synthesizes realistic system trains across all MTA subway lines
+// when offline or when simulation mode is active.
+func (s *Service) simulateSystemTrains() []SystemTrain {
 	var trains []SystemTrain
 	timeBucket := time.Now().Unix() / 20
-	routes := []string{"1", "2", "3", "4", "5", "6", "7", "A", "C", "E", "B", "D", "F", "M", "G", "J", "L", "N", "Q", "R"}
+	routes := []string{
+		"1", "2", "3", "4", "5", "6", "7",
+		"A", "C", "E", "B", "D", "F", "M",
+		"G", "J", "Z", "L", "N", "Q", "R", "W",
+		"GS", "FS", "H", "SI",
+	}
 
 	for _, r := range routes {
 		for _, dir := range []string{"N", "S"} {
 			seq := s.static.CanonicalSequences[r+"_"+dir]
-			if len(seq) < 4 {
+			if len(seq) < 2 {
 				continue
 			}
 			rInfo := s.getRouteInfo(r)
@@ -993,42 +653,98 @@ func (s *Service) generateSimulatedSystemTrains() []SystemTrain {
 				destName = destStopID
 			}
 
-			// Place 2-3 trains per route
-			for idx := 0; idx < 3; idx++ {
-				offset := int((timeBucket*2 + int64(idx*7) + int64(len(r))) % int64(len(seq)-1))
-				currStopID := seq[offset]
+			step := 4
+			if len(seq) < 8 {
+				step = 2
+			}
+			startPos := int(timeBucket % int64(step))
+			var positions []int
+			for pos := startPos; pos < len(seq)-1; pos += step {
+				positions = append(positions, pos)
+			}
+			if len(positions) == 0 || positions[0] != 0 {
+				positions = append([]int{0}, positions...)
+			}
+
+			trackType := "LOCAL"
+			if defaultExpressRoutes[r] {
+				trackType = "EXPRESS"
+			}
+			track := "1"
+			switch r {
+			case "1", "2", "3", "4", "5", "6", "7":
+				if trackType == "EXPRESS" {
+					if dir == "N" {
+						track = "3"
+					} else {
+						track = "2"
+					}
+				} else {
+					if dir == "N" {
+						track = "4"
+					} else {
+						track = "1"
+					}
+				}
+			default:
+				if trackType == "EXPRESS" {
+					if dir == "N" {
+						track = "4"
+					} else {
+						track = "3"
+					}
+				} else {
+					if dir == "N" {
+						track = "2"
+					} else {
+						track = "1"
+					}
+				}
+			}
+
+			now := time.Now().Unix()
+			for _, pos := range positions {
+				currStopID := seq[pos]
 				currStopName := s.stopNames[currStopID]
 				if currStopName == "" {
 					currStopName = currStopID
 				}
 				prevStopID := ""
 				prevStopName := ""
-				if offset > 0 {
-					prevStopID = seq[offset-1]
+				if pos > 0 {
+					prevStopID = seq[pos-1]
 					prevStopName = s.stopNames[prevStopID]
 				}
-				now := time.Now().Unix()
+
 				var upcoming []string
 				var upcomingStops []UpcomingStop
-				for k := offset; k < len(seq); k++ {
+				for k := pos; k < len(seq); k++ {
 					upcoming = append(upcoming, seq[k])
 					upcomingStops = append(upcomingStops, UpcomingStop{
 						StopID:      seq[k],
-						ArrivalTime: now + int64((k-offset)*120),
+						ArrivalTime: now + int64((k-pos)*90),
+						Track:       track,
 					})
 				}
 
 				statusType := "APPROACHING"
 				locationStatus := "Approaching " + currStopName
-				if (timeBucket+int64(idx))%2 == 0 {
+				arrDiff := int64(30)
+				depDiff := int64(90)
+				if pos == 0 || (timeBucket+int64(pos))%2 == 0 {
 					statusType = "AT_STATION"
 					locationStatus = "At " + currStopName
+					arrDiff = 0
+					depDiff = 20
 				} else if prevStopName != "" {
+					statusType = "BETWEEN"
 					locationStatus = "Between " + prevStopName + " & " + currStopName
+					arrDiff = 45
+					depDiff = 105
 				}
 
 				trains = append(trains, SystemTrain{
-					TripID:            fmt.Sprintf("SIM_%s_%s_%d", r, dir, idx),
+					TripID:            fmt.Sprintf("SIM_%s_%s_%d", r, dir, pos),
 					RouteID:           r,
 					RouteShortName:    rInfo.ShortName,
 					RouteColor:        rInfo.Color,
@@ -1042,11 +758,118 @@ func (s *Service) generateSimulatedSystemTrains() []SystemTrain {
 					CurrentStop:       currStopName,
 					PreviousStopID:    prevStopID,
 					PreviousStop:      prevStopName,
+					Track:             track,
+					TrackType:         trackType,
+					ArrDiff:           arrDiff,
+					DepDiff:           depDiff,
 					UpcomingStopIDs:   upcoming,
 					UpcomingStops:     upcomingStops,
 				})
 			}
 		}
 	}
+
 	return trains
+}
+
+// fetchFeeds fetches multiple MTA GTFS-RT feeds concurrently.
+func (s *Service) fetchFeeds(ctx context.Context, feeds []string) []*gtfs.FeedMessage {
+	type feedResult struct {
+		msg *gtfs.FeedMessage
+		err error
+	}
+	results := make([]feedResult, len(feeds))
+	var wg sync.WaitGroup
+	for i, fn := range feeds {
+		wg.Add(1)
+		go func(idx int, feedName string) {
+			defer wg.Done()
+			msg, err := s.fetchFeed(ctx, feedName)
+			results[idx] = feedResult{msg: msg, err: err}
+		}(i, fn)
+	}
+	wg.Wait()
+
+	var validFeeds []*gtfs.FeedMessage
+	for _, r := range results {
+		if r.msg != nil {
+			validFeeds = append(validFeeds, r.msg)
+		}
+	}
+	return validFeeds
+}
+
+// refreshTrains unconditionally fetches all feeds, parses active trains, and updates the cached snapshot.
+func (s *Service) refreshTrains(ctx context.Context) *SystemTrainsResponse {
+	validFeeds := s.fetchFeeds(ctx, allFeeds)
+	now := time.Now().UTC().Format(time.RFC3339)
+	var resp *SystemTrainsResponse
+
+	if len(validFeeds) > 0 {
+		trains, latestTS := s.parseFeedsToTrains(validFeeds)
+		if latestTS == 0 {
+			latestTS = time.Now().Unix()
+		}
+		resp = &SystemTrainsResponse{
+			LastUpdated:   now,
+			DataSource:    "LIVE_MTA_GTFS_RT",
+			FeedTimestamp: latestTS,
+			Trains:        trains,
+		}
+	} else {
+		simTrains := s.simulateSystemTrains()
+		resp = &SystemTrainsResponse{
+			LastUpdated:   now,
+			DataSource:    "SIMULATED_FALLBACK",
+			FeedTimestamp: time.Now().Unix(),
+			Trains:        simTrains,
+		}
+	}
+
+	s.mu.Lock()
+	s.cachedTrains = resp
+	s.trainsFetchedAt = time.Now()
+	s.mu.Unlock()
+
+	return resp
+}
+
+// getOrRefreshTrains returns the cached system train snapshot, refreshing from live feeds
+// if the cache is uninitialized or older than 12 seconds.
+func (s *Service) getOrRefreshTrains(ctx context.Context) *SystemTrainsResponse {
+	s.mu.RLock()
+	if s.cachedTrains != nil && time.Since(s.trainsFetchedAt) < 12*time.Second {
+		resp := s.cachedTrains
+		s.mu.RUnlock()
+		return resp
+	}
+	s.mu.RUnlock()
+
+	return s.refreshTrains(ctx)
+}
+
+// GetAllTrains returns a system-wide snapshot of all active trains.
+func (s *Service) GetAllTrains(ctx context.Context) (*SystemTrainsResponse, error) {
+	return s.getOrRefreshTrains(ctx), nil
+}
+
+// StartBackgroundSync populates the system train cache immediately and refreshes it periodically in the background.
+func (s *Service) StartBackgroundSync(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+	go func() {
+		s.refreshTrains(ctx)
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.refreshTrains(ctx)
+			}
+		}
+	}()
 }
