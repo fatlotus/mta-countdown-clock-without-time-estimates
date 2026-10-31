@@ -48,6 +48,8 @@ func main() {
 			"routes":              static.Routes,
 			"canonical_sequences": static.CanonicalSequences,
 			"daytime_sequences":   static.DaytimeSequences,
+			"spines":              static.Spines,
+			"station_corridors":   static.StationCorridors,
 		})
 	})
 

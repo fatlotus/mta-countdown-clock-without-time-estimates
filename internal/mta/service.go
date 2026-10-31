@@ -82,14 +82,16 @@ func NewService(staticJSONPath string) (*Service, error) {
 	stopNames["A39"] = "Hoyt-Schermerhorn Relay"
 	stopNames["D23"] = "DeKalb Av Junction"
 
-	return &Service{
+	svc := &Service{
 		static:     static,
 		stationMap: stationMap,
 		complexMap: complexMap,
 		stopNames:  stopNames,
 		httpClient: &http.Client{Timeout: 6 * time.Second},
 		feedCache:  make(map[string]cachedFeed),
-	}, nil
+	}
+	svc.precomputeTopology()
+	return svc, nil
 }
 
 // GetStations returns all stations in the system along with route metadata.
@@ -223,8 +225,10 @@ func (s *Service) GetStationBoard(ctx context.Context, stationID string, focusRo
 		return nil, fmt.Errorf("station %q not found", stationID)
 	}
 
-	activeRoutes, transferLinks := s.resolveCorridorAndTransfers(st, focusRoute)
-	trunkRoutes := TrunkCorridorRoutes(activeRoutes)
+	sc, tmap := s.getStationCorridor(st, focusRoute)
+	activeRoutes := sc.ActiveRoutes
+	transferLinks := sc.TransferLinks
+	trunkRoutes := sc.TrunkRoutes
 	allowedRoutesSet := make(map[string]bool, len(trunkRoutes))
 	for _, r := range trunkRoutes {
 		allowedRoutesSet[r] = true
@@ -256,6 +260,7 @@ func (s *Service) GetStationBoard(ctx context.Context, stationID string, focusRo
 			Label:     southLabel,
 			Trains:    []TrainArrival{},
 		},
+		TrackMap:    tmap,
 		LastUpdated: time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -876,10 +881,25 @@ func (s *Service) GetAllTrains(ctx context.Context) (*SystemTrainsResponse, erro
 			}
 
 			var upcoming []string
+			var upcomingStops []UpcomingStop
 			for k := currIdx; k < len(stus); k++ {
 				sid := CleanStopID(stus[k].GetStopId())
 				if sid != "" {
 					upcoming = append(upcoming, sid)
+					tInfo := ExtractNyctTrackInfo(stus[k])
+					trackVal := tInfo.ActualTrack
+					if trackVal == "" {
+						trackVal = tInfo.ScheduledTrack
+					}
+					aTime := stus[k].GetArrival().GetTime()
+					if aTime == 0 {
+						aTime = stus[k].GetDeparture().GetTime()
+					}
+					upcomingStops = append(upcomingStops, UpcomingStop{
+						StopID:      sid,
+						ArrivalTime: aTime,
+						Track:       trackVal,
+					})
 				}
 			}
 
@@ -888,10 +908,42 @@ func (s *Service) GetAllTrains(ctx context.Context) (*SystemTrainsResponse, erro
 			if arrTime == 0 {
 				arrTime = stus[currIdx].GetDeparture().GetTime()
 			}
+			depTime := stus[currIdx].GetDeparture().GetTime()
+			if depTime == 0 {
+				depTime = arrTime
+			}
+			arrDiff := int64(0)
+			if arrTime > 0 {
+				arrDiff = arrTime - feedTS
+			}
+			depDiff := int64(0)
+			if depTime > 0 {
+				depDiff = depTime - feedTS
+			}
 			if arrTime > 0 && (arrTime-feedTS) <= 15 && (feedTS-arrTime) <= 45 {
 				statusType = "AT_STATION"
 			} else if prevStopID != "" && (arrTime-feedTS) > 40 {
 				statusType = "BETWEEN"
+			}
+
+			var trackType string
+			var currTrack string
+			if currIdx < len(stus) {
+				tInfo := ExtractNyctTrackInfo(stus[currIdx])
+				currTrack = tInfo.ActualTrack
+				if currTrack == "" {
+					currTrack = tInfo.ScheduledTrack
+				}
+				if currTrack != "" {
+					trackType = ClassifyTrackType(currTrack, routeID)
+				}
+			}
+
+			locationStatus := "Approaching " + currStopName
+			if statusType == "AT_STATION" {
+				locationStatus = "At " + currStopName
+			} else if statusType == "BETWEEN" && prevStopName != "" {
+				locationStatus = "Between " + prevStopName + " & " + currStopName
 			}
 
 			seenTrips[tripID] = true
@@ -910,6 +962,12 @@ func (s *Service) GetAllTrains(ctx context.Context) (*SystemTrainsResponse, erro
 				PreviousStopID:    prevStopID,
 				PreviousStop:      prevStopName,
 				UpcomingStopIDs:   upcoming,
+				Track:             currTrack,
+				TrackType:         trackType,
+				LocationStatus:    locationStatus,
+				ArrDiff:           arrDiff,
+				DepDiff:           depDiff,
+				UpcomingStops:     upcomingStops,
 			})
 		}
 	}
@@ -949,14 +1007,24 @@ func (s *Service) generateSimulatedSystemTrains() []SystemTrain {
 					prevStopID = seq[offset-1]
 					prevStopName = s.stopNames[prevStopID]
 				}
+				now := time.Now().Unix()
 				var upcoming []string
+				var upcomingStops []UpcomingStop
 				for k := offset; k < len(seq); k++ {
 					upcoming = append(upcoming, seq[k])
+					upcomingStops = append(upcomingStops, UpcomingStop{
+						StopID:      seq[k],
+						ArrivalTime: now + int64((k-offset)*120),
+					})
 				}
 
 				statusType := "APPROACHING"
+				locationStatus := "Approaching " + currStopName
 				if (timeBucket+int64(idx))%2 == 0 {
 					statusType = "AT_STATION"
+					locationStatus = "At " + currStopName
+				} else if prevStopName != "" {
+					locationStatus = "Between " + prevStopName + " & " + currStopName
 				}
 
 				trains = append(trains, SystemTrain{
@@ -969,11 +1037,13 @@ func (s *Service) generateSimulatedSystemTrains() []SystemTrain {
 					Destination:       destName,
 					DestinationStopID: destStopID,
 					StatusType:        statusType,
+					LocationStatus:    locationStatus,
 					CurrentStopID:     currStopID,
 					CurrentStop:       currStopName,
 					PreviousStopID:    prevStopID,
 					PreviousStop:      prevStopName,
 					UpcomingStopIDs:   upcoming,
+					UpcomingStops:     upcomingStops,
 				})
 			}
 		}

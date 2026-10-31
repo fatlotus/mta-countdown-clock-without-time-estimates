@@ -26,10 +26,41 @@ type RouteInfo struct {
 
 // StaticData holds the embedded GTFS metadata for all 496 stations, routes, and canonical/daytime sequences.
 type StaticData struct {
-	Stations           []Station            `json:"stations"`
-	Routes             map[string]RouteInfo `json:"routes"`
-	CanonicalSequences map[string][]string  `json:"canonical_sequences"`
-	DaytimeSequences   map[string][]string  `json:"daytime_sequences"`
+	Stations           []Station                    `json:"stations"`
+	Routes             map[string]RouteInfo         `json:"routes"`
+	CanonicalSequences map[string][]string          `json:"canonical_sequences"`
+	DaytimeSequences   map[string][]string          `json:"daytime_sequences"`
+	Spines             map[string]CorridorSpine     `json:"spines,omitempty"`
+	StationCorridors   map[string][]StationCorridor `json:"station_corridors,omitempty"`
+}
+
+// CorridorSpine holds the precomputed static track diagram spine and station nodes for a line corridor.
+type CorridorSpine struct {
+	ID              string             `json:"id"`
+	LineName        string             `json:"line_name"`
+	CorridorRoutes  []string           `json:"corridor_routes"`
+	LocalRoutes     []string           `json:"local_routes"`
+	ExpressRoutes   []string           `json:"express_routes"`
+	HasExpressTrack bool               `json:"has_express_track"`
+	Nodes           []TrackDiagramNode `json:"nodes"`
+}
+
+// StationCorridor holds a station's precomputed corridor configuration, transfer links, and reference to its CorridorSpine.
+type StationCorridor struct {
+	FocusRoute    string         `json:"focus_route"`
+	LineName      string         `json:"line_name"`
+	ActiveRoutes  []string       `json:"active_routes"`
+	TrunkRoutes   []string       `json:"trunk_routes"`
+	SpineID       string         `json:"spine_id"`
+	TargetIndex   int            `json:"target_index"`
+	TransferLinks []TransferLink `json:"transfer_links"`
+}
+
+// UpcomingStop represents a future stop along an active train's trip.
+type UpcomingStop struct {
+	StopID      string `json:"stop_id"`
+	ArrivalTime int64  `json:"arrival_time,omitempty"`
+	Track       string `json:"track,omitempty"`
 }
 
 // TransferLink represents a clickable route/corridor link at a station or station complex
@@ -144,21 +175,26 @@ type StationBoardResponse struct {
 
 // SystemTrain represents an active train across the entire NYC subway system for offline caching.
 type SystemTrain struct {
-	TripID            string   `json:"trip_id"`
-	RouteID           string   `json:"route_id"`
-	RouteShortName    string   `json:"route_short_name"`
-	RouteColor        string   `json:"route_color"`
-	RouteTextColor    string   `json:"route_text_color"`
-	Direction         string   `json:"direction"`
-	Destination       string   `json:"destination"`
-	DestinationStopID string   `json:"destination_stop_id,omitempty"`
-	StatusType        string   `json:"status_type"`
-	CurrentStopID     string   `json:"current_stop_id"`
-	CurrentStop       string   `json:"current_stop"`
-	PreviousStopID    string   `json:"previous_stop_id,omitempty"`
-	PreviousStop      string   `json:"previous_stop,omitempty"`
-	UpcomingStopIDs   []string `json:"upcoming_stop_ids"`
-	Track             string   `json:"track,omitempty"`
+	TripID            string         `json:"trip_id"`
+	RouteID           string         `json:"route_id"`
+	RouteShortName    string         `json:"route_short_name"`
+	RouteColor        string         `json:"route_color"`
+	RouteTextColor    string         `json:"route_text_color"`
+	Direction         string         `json:"direction"`
+	Destination       string         `json:"destination"`
+	DestinationStopID string         `json:"destination_stop_id,omitempty"`
+	StatusType        string         `json:"status_type"`
+	CurrentStopID     string         `json:"current_stop_id"`
+	CurrentStop       string         `json:"current_stop"`
+	PreviousStopID    string         `json:"previous_stop_id,omitempty"`
+	PreviousStop      string         `json:"previous_stop,omitempty"`
+	UpcomingStopIDs   []string       `json:"upcoming_stop_ids"`
+	Track             string         `json:"track,omitempty"`
+	TrackType         string         `json:"track_type,omitempty"`
+	LocationStatus    string         `json:"location_status,omitempty"`
+	ArrDiff           int64          `json:"arr_diff"`
+	DepDiff           int64          `json:"dep_diff"`
+	UpcomingStops     []UpcomingStop `json:"upcoming_stops,omitempty"`
 }
 
 // SystemTrainsResponse holds all active trains in the system for offline browsing across all 496 stations.
