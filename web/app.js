@@ -163,6 +163,9 @@
   const staleBannerBadgeEl = document.getElementById("stale-banner-badge");
   const staleBannerTextEl = document.getElementById("stale-banner-text");
   const stationAlertsContainerEl = document.getElementById("station-alerts-container");
+  const northAlertsEl = document.getElementById("north-alerts");
+  const southAlertsEl = document.getElementById("south-alerts");
+  const expandedAlertIds = new Set();
 
   function updateStaleBanner(show, badge = "", msg = "", isExpired = false) {
     if (!staleBannerEl) return;
@@ -671,33 +674,34 @@
       }
 
       // Station & direction matching
+      const effectiveAlertDir = al.direction || inferAlertDirection(al.header_text);
       let stopIDs = Array.isArray(al.stop_ids) ? al.stop_ids : [];
       if (stopIDs.length === 0) {
-        stopIDs = inferAlertStopIDs(al.header_text, al.routes, al.direction);
+        stopIDs = inferAlertStopIDs(al.header_text, al.routes, effectiveAlertDir);
       }
       if (stopIDs.length === 0) {
         // Line-wide alert
-        const matchesN = !al.direction || al.direction === "N";
-        const matchesS = !al.direction || al.direction === "S";
+        const matchesN = !effectiveAlertDir || effectiveAlertDir === "N";
+        const matchesS = !effectiveAlertDir || effectiveAlertDir === "S";
         if (!matchesN && !matchesS) return;
 
         stationAlerts.push({
           ...al,
           is_active_now: isActiveNow,
-          direction: al.direction || "",
+          direction: effectiveAlertDir || "",
         });
         if (matchesN) {
           northAlerts.push({
             ...al,
             is_active_now: isActiveNow,
-            direction: al.direction === "N" ? "N" : "",
+            direction: effectiveAlertDir === "N" ? "N" : "",
           });
         }
         if (matchesS) {
           southAlerts.push({
             ...al,
             is_active_now: isActiveNow,
-            direction: al.direction === "S" ? "S" : "",
+            direction: effectiveAlertDir === "S" ? "S" : "",
           });
         }
       } else {
@@ -707,11 +711,11 @@
         const hasS = hasBoth || stopIDs.includes(st.id + "S");
         if (!hasN && !hasS) return;
 
-        const matchesN = hasN && (!al.direction || al.direction === "N");
-        const matchesS = hasS && (!al.direction || al.direction === "S");
+        const matchesN = hasN && (!effectiveAlertDir || effectiveAlertDir === "N");
+        const matchesS = hasS && (!effectiveAlertDir || effectiveAlertDir === "S");
         if (!matchesN && !matchesS) return;
 
-        const stationDir = hasN && !hasS ? "N" : hasS && !hasN ? "S" : al.direction || "";
+        const stationDir = hasN && !hasS ? "N" : hasS && !hasN ? "S" : effectiveAlertDir || "";
         stationAlerts.push({
           ...al,
           is_active_now: isActiveNow,
@@ -1323,6 +1327,17 @@
     return s.trim();
   }
 
+  function inferAlertDirection(headerText) {
+    if (!headerText) return "";
+    const lower = headerText.toLowerCase();
+    if (lower.includes("both directions")) return "";
+    const hasN = /\b(uptown|northbound)\b/i.test(lower);
+    const hasS = /\b(downtown|southbound)\b/i.test(lower);
+    if (hasN && !hasS) return "N";
+    if (hasS && !hasN) return "S";
+    return "";
+  }
+
   function inferAlertStopIDs(headerText, alertRoutes = [], direction = "") {
     if (!headerText || !Array.isArray(allStations) || allStations.length === 0) {
       return [];
@@ -1488,16 +1503,21 @@
     return formatted;
   }
 
-  function renderStationAlerts(alerts, st) {
-    if (!stationAlertsContainerEl) return;
-    stationAlertsContainerEl.innerHTML = "";
+  function getAlertKey(al) {
+    if (!al) return "";
+    return al.id ? `${al.id}_${al.direction || ""}` : (al.header_text || "");
+  }
+
+  function renderAlertList(containerEl, alerts) {
+    if (!containerEl) return;
+    containerEl.innerHTML = "";
 
     if (!Array.isArray(alerts) || alerts.length === 0) {
-      stationAlertsContainerEl.classList.add("hidden");
+      containerEl.classList.add("hidden");
       return;
     }
 
-    stationAlertsContainerEl.classList.remove("hidden");
+    containerEl.classList.remove("hidden");
     const fragment = document.createDocumentFragment();
 
     alerts.forEach((al) => {
@@ -1506,64 +1526,96 @@
 
       if (!cleanHeader && !cleanDesc) return;
 
-      const card = document.createElement("article");
+      const alertKey = getAlertKey(al);
+      const isExpanded = expandedAlertIds.has(alertKey);
       const isUpcoming = !al.is_active_now;
-      card.className = `station-alert-card ${isUpcoming ? "upcoming" : ""}`.trim();
 
-      const header = document.createElement("div");
-      header.className = "station-alert-header";
+      const card = document.createElement("article");
+      card.className = `compact-alert-item ${isUpcoming ? "upcoming" : ""} ${isExpanded ? "expanded" : ""}`.trim();
 
-      if (Array.isArray(al.routes) && al.routes.length > 0) {
-        al.routes.forEach((r) => {
-          header.appendChild(createRouteBullet(r, "sm"));
-        });
-      }
+      const summaryRow = document.createElement("div");
+      summaryRow.className = "alert-summary-row";
+      summaryRow.setAttribute("role", "button");
+      summaryRow.setAttribute("tabindex", "0");
+      summaryRow.setAttribute("aria-expanded", isExpanded ? "true" : "false");
 
-      const statusBadge = document.createElement("span");
+      const leftEl = document.createElement("div");
+      leftEl.className = "alert-summary-left";
+
+      const badge = document.createElement("span");
       if (al.is_active_now) {
-        statusBadge.className = "alert-badge active";
-        statusBadge.textContent = al.alert_type || "SERVICE ALERT";
+        badge.className = "alert-badge active";
+        badge.textContent = al.alert_type || "SERVICE ALERT";
       } else {
-        statusBadge.className = "alert-badge upcoming";
-        statusBadge.textContent = "UPCOMING (NEXT 24H)";
+        badge.className = "alert-badge upcoming";
+        badge.textContent = "UPCOMING";
       }
-      header.appendChild(statusBadge);
+      leftEl.appendChild(badge);
 
-      if (al.direction === "N") {
-        const dirBadge = document.createElement("span");
-        dirBadge.className = "alert-badge direction";
-        dirBadge.textContent = "Northbound Only";
-        header.appendChild(dirBadge);
-      } else if (al.direction === "S") {
-        const dirBadge = document.createElement("span");
-        dirBadge.className = "alert-badge direction";
-        dirBadge.textContent = "Southbound Only";
-        header.appendChild(dirBadge);
-      }
+      const headingEl = document.createElement("span");
+      headingEl.className = "alert-summary-heading";
+      headingEl.innerHTML = formatAlertTextWithBullets(cleanHeader || cleanDesc);
+      headingEl.title = cleanHeader || cleanDesc;
+      leftEl.appendChild(headingEl);
 
-      card.appendChild(header);
+      summaryRow.appendChild(leftEl);
 
-      if (cleanHeader) {
-        const titleEl = document.createElement("h3");
-        titleEl.className = "alert-title";
-        titleEl.innerHTML = formatAlertTextWithBullets(cleanHeader);
-        card.appendChild(titleEl);
-      }
+      const toggleBtn = document.createElement("button");
+      toggleBtn.type = "button";
+      toggleBtn.className = "alert-toggle-btn";
+      toggleBtn.textContent = isExpanded ? "Hide ▴" : "Details ▾";
+      summaryRow.appendChild(toggleBtn);
+
+      card.appendChild(summaryRow);
+
+      const detailsBody = document.createElement("div");
+      detailsBody.className = `alert-details-body ${isExpanded ? "" : "hidden"}`.trim();
 
       if (cleanDesc && cleanDesc !== cleanHeader) {
         const descEl = document.createElement("div");
         descEl.className = "alert-desc";
         descEl.innerHTML = formatAlertTextWithBullets(cleanDesc);
-        card.appendChild(descEl);
+        detailsBody.appendChild(descEl);
+      } else {
+        const fullHeaderEl = document.createElement("div");
+        fullHeaderEl.className = "alert-desc";
+        fullHeaderEl.innerHTML = formatAlertTextWithBullets(cleanHeader);
+        detailsBody.appendChild(fullHeaderEl);
       }
+
+      card.appendChild(detailsBody);
+
+      const toggleAction = () => {
+        if (expandedAlertIds.has(alertKey)) {
+          expandedAlertIds.delete(alertKey);
+          card.classList.remove("expanded");
+          detailsBody.classList.add("hidden");
+          toggleBtn.textContent = "Details ▾";
+          summaryRow.setAttribute("aria-expanded", "false");
+        } else {
+          expandedAlertIds.add(alertKey);
+          card.classList.add("expanded");
+          detailsBody.classList.remove("hidden");
+          toggleBtn.textContent = "Hide ▴";
+          summaryRow.setAttribute("aria-expanded", "true");
+        }
+      };
+
+      summaryRow.addEventListener("click", toggleAction);
+      summaryRow.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          toggleAction();
+        }
+      });
 
       fragment.appendChild(card);
     });
 
     if (fragment.children.length === 0) {
-      stationAlertsContainerEl.classList.add("hidden");
+      containerEl.classList.add("hidden");
     } else {
-      stationAlertsContainerEl.appendChild(fragment);
+      containerEl.appendChild(fragment);
     }
   }
 
@@ -1636,7 +1688,14 @@
       ? `Cached snapshot (Offline)`
       : `Updated ${updatedTime}`;
 
-    renderStationAlerts(board.alerts || [], st);
+    const allAlerts = board.alerts || [];
+    const stationWideAlerts = allAlerts.filter((al) => !al.direction);
+    const northOnlyAlerts = allAlerts.filter((al) => al.direction === "N");
+    const southOnlyAlerts = allAlerts.filter((al) => al.direction === "S");
+
+    renderAlertList(stationAlertsContainerEl, stationWideAlerts);
+    renderAlertList(northAlertsEl, northOnlyAlerts);
+    renderAlertList(southAlertsEl, southOnlyAlerts);
 
     renderDirectionPanel(
       board.northbound,
@@ -1758,9 +1817,15 @@
     if (trains.length === 0) {
       const empty = document.createElement("div");
       empty.className = "empty-board-state";
-      const note =
+      let note =
         dirBoard.service_note ||
         "No trains currently approaching this platform.";
+      if (
+        Array.isArray(dirBoard.alerts) &&
+        dirBoard.alerts.some((a) => a.direction === dirBoard.direction)
+      ) {
+        note = "See active service notice above for reroute and schedule details.";
+      }
       empty.innerHTML = `
         <div class="empty-title">No Active Trains on This Track</div>
         <div class="empty-sub">${formatAlertTextWithBullets(note)}</div>

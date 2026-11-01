@@ -1811,36 +1811,56 @@ a.strip-node:hover {
 }
 
 /* ==========================================================================
-   STATION SERVICE ALERTS & NOTICES (MTA Planned Work & Service Changes)
+   STATION & DIRECTIONAL SERVICE ALERTS (Compact Collapsible LCD Design)
    ========================================================================== */
 
-.station-alerts-container {
+.station-alerts-container,
+.direction-alerts-container {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-bottom: 16px;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
-.station-alert-card {
+.direction-alerts-container {
+  margin: 8px 12px 10px 12px;
+}
+
+.compact-alert-item {
   background: var(--bg-panel);
   border: 1px solid var(--border-color);
   border-left: 4px solid var(--accent-amber);
   border-radius: 6px;
-  padding: 12px 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
   transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
-.station-alert-card.upcoming {
+.compact-alert-item.upcoming {
   border-left-color: var(--accent-blue);
 }
 
-.station-alert-header {
+.alert-summary-row {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease;
+}
+
+.alert-summary-row:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.alert-summary-left {
+  display: flex;
+  align-items: center;
   gap: 8px;
-  margin-bottom: 6px;
+  min-width: 0;
+  flex: 1;
 }
 
 .alert-badge {
@@ -1849,10 +1869,11 @@ a.strip-node:hover {
   font-weight: 700;
   font-size: 0.72rem;
   letter-spacing: 0.05em;
-  padding: 2px 8px;
+  padding: 2px 7px;
   border-radius: 4px;
   text-transform: uppercase;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .alert-badge.active {
@@ -1873,25 +1894,82 @@ a.strip-node:hover {
   color: var(--text-secondary);
 }
 
-.alert-title {
-  font-size: 0.95rem;
-  font-weight: 700;
+.alert-summary-heading {
+  font-size: 0.88rem;
+  font-weight: 600;
   color: var(--text-primary);
-  line-height: 1.4;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.alert-details,
+.compact-alert-item.expanded .alert-summary-heading {
+  white-space: normal;
+}
+
+.compact-alert-item.expanded .alert-summary-row,
+.compact-alert-item.expanded .alert-summary-left {
+  align-items: flex-start;
+}
+
+.compact-alert-item.expanded .alert-badge,
+.compact-alert-item.expanded .alert-toggle-btn {
+  margin-top: 1px;
+}
+
+.alert-toggle-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.alert-toggle-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+.alert-details-body {
+  padding: 8px 12px 12px 12px;
+  border-top: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.alert-details-body.hidden {
+  display: none;
+}
+
 .alert-desc {
-  font-size: 0.85rem;
+  font-size: 0.84rem;
   color: var(--text-secondary);
   line-height: 1.45;
   white-space: pre-line;
-  margin-top: 4px;
 }
 
 /* Light Mode Overrides for Alerts */
-[data-theme="light"] .station-alert-card {
-  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
+[data-theme="light"] .compact-alert-item {
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.06);
+}
+
+[data-theme="light"] .alert-summary-row:hover {
+  background-color: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .alert-toggle-btn:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .alert-details-body {
+  background: rgba(0, 0, 0, 0.03);
 }
 
 [data-theme="light"] .alert-badge.active {

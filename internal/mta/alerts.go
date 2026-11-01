@@ -20,6 +20,9 @@ var (
 	reStepA       = regexp.MustCompile(`(?i)(?:at|near|to|from|and|,)\s+([A-Z0-9][A-Za-z0-9\s\-\/\.]+?)\s*(\[[A-Za-z0-9]+\](?:\[[A-Za-z0-9]+\])*)`)
 	reBracketTags = regexp.MustCompile(`\[([A-Za-z0-9]+)\]`)
 	reLeadingPre  = regexp.MustCompile(`(?i)^(?:at|near|to|from|and)\s+`)
+
+	reDirNorth = regexp.MustCompile(`(?i)\b(uptown|northbound)\b`)
+	reDirSouth = regexp.MustCompile(`(?i)\b(downtown|southbound)\b`)
 )
 
 func cleanRouteID(r string) string {
@@ -32,6 +35,26 @@ func cleanRouteID(r string) string {
 	default:
 		return r
 	}
+}
+
+// inferAlertDirection infers direction ("N", "S", or "") from alert header text when direction_id is omitted.
+func inferAlertDirection(headerText string) string {
+	if headerText == "" {
+		return ""
+	}
+	lower := strings.ToLower(headerText)
+	if strings.Contains(lower, "both directions") {
+		return ""
+	}
+	hasN := reDirNorth.MatchString(lower)
+	hasS := reDirSouth.MatchString(lower)
+	if hasN && !hasS {
+		return "N"
+	}
+	if hasS && !hasN {
+		return "S"
+	}
+	return ""
 }
 
 // inferAlertStopIDs infers affected station stop IDs from alert header text when stop_ids is omitted.
@@ -355,15 +378,15 @@ func parseFeedToAlerts(feed *gtfs.FeedMessage, nowSec int64, stations ...[]Stati
 		}
 
 		direction := ""
-		if len(stopIDs) == 0 {
-			if hasDir0 && !hasDir1 {
-				direction = "N"
-			} else if hasDir1 && !hasDir0 {
-				direction = "S"
-			}
-			if len(stList) > 0 {
-				stopIDs = inferAlertStopIDs(stList, headerText, routes, direction)
-			}
+		if hasDir0 && !hasDir1 {
+			direction = "N"
+		} else if hasDir1 && !hasDir0 {
+			direction = "S"
+		} else {
+			direction = inferAlertDirection(headerText)
+		}
+		if len(stopIDs) == 0 && len(stList) > 0 {
+			stopIDs = inferAlertStopIDs(stList, headerText, routes, direction)
 		}
 
 		entityID := strings.TrimSpace(entity.GetId())
@@ -435,24 +458,31 @@ func (s *Service) projectStationAlerts(st Station, allowedRoutesSet map[string]b
 		}
 
 		// 3. Station & direction matching
+		effectiveDir := al.Direction
+		if effectiveDir == "" {
+			effectiveDir = inferAlertDirection(al.HeaderText)
+		}
+
 		stopIDs := al.StopIDs
 		if len(stopIDs) == 0 && len(s.static.Stations) > 0 {
-			stopIDs = inferAlertStopIDs(s.static.Stations, al.HeaderText, al.Routes, al.Direction)
+			stopIDs = inferAlertStopIDs(s.static.Stations, al.HeaderText, al.Routes, effectiveDir)
 		}
 
 		if len(stopIDs) == 0 {
 			// Line-wide alert
-			matchesN := al.Direction == "" || al.Direction == "N"
-			matchesS := al.Direction == "" || al.Direction == "S"
+			matchesN := effectiveDir == "" || effectiveDir == "N"
+			matchesS := effectiveDir == "" || effectiveDir == "S"
 			if !matchesN && !matchesS {
 				continue
 			}
-			stationAlerts = append(stationAlerts, al)
+			alCopy := al
+			alCopy.Direction = effectiveDir
+			stationAlerts = append(stationAlerts, alCopy)
 			if matchesN {
-				northAlerts = append(northAlerts, al)
+				northAlerts = append(northAlerts, alCopy)
 			}
 			if matchesS {
-				southAlerts = append(southAlerts, al)
+				southAlerts = append(southAlerts, alCopy)
 			}
 		} else {
 			// Station-specific alert
@@ -463,21 +493,27 @@ func (s *Service) projectStationAlerts(st Station, allowedRoutesSet map[string]b
 				continue
 			}
 
+			matchesN := hasN && (effectiveDir == "" || effectiveDir == "N")
+			matchesS := hasS && (effectiveDir == "" || effectiveDir == "S")
+			if !matchesN && !matchesS {
+				continue
+			}
+
 			stAl := al
 			if hasN && !hasS {
 				stAl.Direction = "N"
 			} else if hasS && !hasN {
 				stAl.Direction = "S"
 			} else {
-				stAl.Direction = ""
+				stAl.Direction = effectiveDir
 			}
 			stationAlerts = append(stationAlerts, stAl)
 
-			if hasN {
-				northAlerts = append(northAlerts, al)
+			if matchesN {
+				northAlerts = append(northAlerts, stAl)
 			}
-			if hasS {
-				southAlerts = append(southAlerts, al)
+			if matchesS {
+				southAlerts = append(southAlerts, stAl)
 			}
 		}
 	}

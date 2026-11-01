@@ -442,3 +442,61 @@ func TestInferAlertStopIDsFromText(t *testing.T) {
 		t.Errorf("marathon alert %q SHOULD have matched Brooklyn Fulton St (G36)!", marathonAlert.ID)
 	}
 }
+
+func TestInferAlertDirection(t *testing.T) {
+	if dir := inferAlertDirection("Downtown [A][C][D] trains are running with delays..."); dir != "S" {
+		t.Errorf("expected inferAlertDirection for Downtown alert to be 'S', got %q", dir)
+	}
+	if dir := inferAlertDirection("Uptown [F] trains are running with delays..."); dir != "N" {
+		t.Errorf("expected inferAlertDirection for Uptown alert to be 'N', got %q", dir)
+	}
+	if dir := inferAlertDirection("Trains are running with delays in both directions"); dir != "" {
+		t.Errorf("expected inferAlertDirection for both directions alert to be '', got %q", dir)
+	}
+
+	// Verify parseFeedToAlerts infers direction from header text when direction_id is omitted
+	feed := &gtfs.FeedMessage{
+		Header: &gtfs.FeedHeader{
+			Timestamp: uint64Ptr(uint64(time.Now().Unix())),
+		},
+		Entity: []*gtfs.FeedEntity{
+			{
+				Id: strPtr("mta_alert:delays_downtown_acd"),
+				Alert: &gtfs.Alert{
+					InformedEntity: []*gtfs.EntitySelector{
+						{RouteId: strPtr("A")},
+					},
+					HeaderText: &gtfs.TranslatedString{
+						Translation: []*gtfs.TranslatedString_Translation{
+							{Text: strPtr("Downtown [A][C][D] trains are running with delays..."), Language: strPtr("en")},
+						},
+					},
+				},
+			},
+			{
+				Id: strPtr("mta_alert:delays_uptown_f"),
+				Alert: &gtfs.Alert{
+					InformedEntity: []*gtfs.EntitySelector{
+						{RouteId: strPtr("F")},
+					},
+					HeaderText: &gtfs.TranslatedString{
+						Translation: []*gtfs.TranslatedString_Translation{
+							{Text: strPtr("Uptown [F] trains are running with delays..."), Language: strPtr("en")},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	alerts, _ := parseFeedToAlerts(feed, time.Now().Unix())
+	if len(alerts) != 2 {
+		t.Fatalf("expected 2 alerts parsed, got %d", len(alerts))
+	}
+	if alerts[0].Direction != "S" {
+		t.Errorf("expected alerts[0].Direction == 'S', got %q", alerts[0].Direction)
+	}
+	if alerts[1].Direction != "N" {
+		t.Errorf("expected alerts[1].Direction == 'N', got %q", alerts[1].Direction)
+	}
+}
