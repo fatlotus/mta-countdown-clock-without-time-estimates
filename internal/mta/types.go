@@ -104,6 +104,7 @@ type DirectionBoard struct {
 	Label       string         `json:"label"`
 	Trains      []TrainArrival `json:"trains"`
 	ServiceNote string         `json:"service_note,omitempty"`
+	Alerts      []ServiceAlert `json:"alerts,omitempty"`
 }
 
 // TrackDiagramNode represents one station row along the vertical line corridor in Track Map Mode.
@@ -167,10 +168,33 @@ type StationBoardResponse struct {
 	RouteMetadata map[string]RouteInfo `json:"route_metadata"`
 	Northbound    DirectionBoard       `json:"northbound"`
 	Southbound    DirectionBoard       `json:"southbound"`
+	Alerts        []ServiceAlert       `json:"alerts,omitempty"`
 	TrackMap      TrackMapData         `json:"track_map"`
 	DataSource    string               `json:"data_source"` // "LIVE_MTA_GTFS_RT" or "SIMULATED_FALLBACK"
 	LastUpdated   string               `json:"last_updated"`
 	FeedTimestamp int64                `json:"feed_timestamp"`
+}
+
+type AlertTimeWindow struct {
+	Start int64 `json:"start"`
+	End   int64 `json:"end,omitempty"`
+}
+
+type ServiceAlert struct {
+	ID            string            `json:"id"`
+	AlertType     string            `json:"alert_type"`
+	Routes        []string          `json:"routes"`
+	StopIDs       []string          `json:"stop_ids,omitempty"`
+	Direction     string            `json:"direction,omitempty"`
+	HeaderText    string            `json:"header_text"`
+	Description   string            `json:"description,omitempty"`
+	ActivePeriods []AlertTimeWindow `json:"active_periods,omitempty"`
+}
+
+type SystemAlertsResponse struct {
+	LastUpdated   string         `json:"last_updated"`
+	FeedTimestamp int64          `json:"feed_timestamp"`
+	Alerts        []ServiceAlert `json:"alerts"`
 }
 
 // SystemTrain represents an active train across the entire NYC subway system for offline caching.

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MobilityData/gtfs-realtime-bindings/golang/gtfs"
@@ -25,6 +26,18 @@ var allFeeds = []string{
 	"gtfs-l",
 	"gtfs",
 	"gtfs-si",
+}
+
+var feedURLs = map[string]string{
+	"gtfs-ace":  "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-ace",
+	"gtfs-bdfm": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-bdfm",
+	"gtfs-g":    "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-g",
+	"gtfs-jz":   "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-jz",
+	"gtfs-nqrw": "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-nqrw",
+	"gtfs-l":    "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-l",
+	"gtfs":      "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs",
+	"gtfs-si":   "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-si",
+	"alerts":    "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts",
 }
 
 type cachedFeed struct {
@@ -44,6 +57,9 @@ type Service struct {
 	feedCache       map[string]cachedFeed
 	cachedTrains    *SystemTrainsResponse
 	trainsFetchedAt time.Time
+
+	alertsSnapshot  atomic.Pointer[SystemAlertsResponse]
+	alertsRefreshMu sync.Mutex
 }
 
 // NewService loads the static MTA station/route JSON and initializes the GTFS-RT service.
@@ -131,7 +147,10 @@ func (s *Service) fetchFeed(ctx context.Context, feedName string) (*gtfs.FeedMes
 		return cached.msg, nil
 	}
 
-	url := fmt.Sprintf("https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%%2F%s", feedName)
+	url, okURL := feedURLs[feedName]
+	if !okURL {
+		url = fmt.Sprintf("https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%%2F%s", feedName)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -238,12 +257,38 @@ func (s *Service) GetStationBoard(ctx context.Context, stationID string, focusRo
 	resp.Southbound.Trains = southTrains
 	resp.TrackMap.Vehicles = s.projectTrackVehicles(tmap, trains)
 
-	if !forceSimulate {
-		if len(northTrains) == 0 && st.NorthLabel != "" {
-			resp.Northbound.ServiceNote = "No active trains currently scheduled for this platform in live MTA feed (possible reroute or off-hours service change)."
+	var alerts []ServiceAlert
+	if forceSimulate {
+		if snap := s.alertsSnapshot.Load(); snap != nil {
+			alerts = snap.Alerts
 		}
-		if len(southTrains) == 0 && st.SouthLabel != "" {
-			resp.Southbound.ServiceNote = "No active trains currently scheduled for this platform in live MTA feed (possible reroute or off-hours service change)."
+	} else {
+		alertsResp := s.getOrRefreshAlerts(ctx)
+		if alertsResp != nil {
+			alerts = alertsResp.Alerts
+		}
+	}
+
+	nowSec := time.Now().Unix()
+	stationAlerts, northAlerts, southAlerts := s.projectStationAlerts(st, allowedRoutesSet, alerts, nowSec)
+	resp.Alerts = stationAlerts
+	resp.Northbound.Alerts = northAlerts
+	resp.Southbound.Alerts = southAlerts
+
+	if !forceSimulate {
+		if len(northTrains) == 0 {
+			if len(northAlerts) > 0 {
+				resp.Northbound.ServiceNote = northAlerts[0].HeaderText
+			} else if st.NorthLabel != "" {
+				resp.Northbound.ServiceNote = "No active trains currently scheduled for this platform in live MTA feed (possible reroute or off-hours service change)."
+			}
+		}
+		if len(southTrains) == 0 {
+			if len(southAlerts) > 0 {
+				resp.Southbound.ServiceNote = southAlerts[0].HeaderText
+			} else if st.SouthLabel != "" {
+				resp.Southbound.ServiceNote = "No active trains currently scheduled for this platform in live MTA feed (possible reroute or off-hours service change)."
+			}
 		}
 	}
 
@@ -853,22 +898,91 @@ func (s *Service) GetAllTrains(ctx context.Context) (*SystemTrainsResponse, erro
 	return s.getOrRefreshTrains(ctx), nil
 }
 
-// StartBackgroundSync populates the system train cache immediately and refreshes it periodically in the background.
+// refreshAlerts fetches the live alerts feed, parses active/upcoming alerts, and stores the snapshot.
+func (s *Service) refreshAlerts(ctx context.Context) *SystemAlertsResponse {
+	feed, err := s.fetchFeed(ctx, "alerts")
+	nowSec := time.Now().Unix()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	var alerts []ServiceAlert
+	feedTS := nowSec
+
+	if err == nil && feed != nil {
+		parsedAlerts, ts := parseFeedToAlerts(feed, nowSec)
+		alerts = parsedAlerts
+		if ts != 0 {
+			feedTS = ts
+		}
+	} else {
+		// If fetch failed, preserve previous snapshot if available
+		if existing := s.alertsSnapshot.Load(); existing != nil {
+			return existing
+		}
+	}
+
+	if alerts == nil {
+		alerts = []ServiceAlert{}
+	}
+
+	resp := &SystemAlertsResponse{
+		LastUpdated:   now,
+		FeedTimestamp: feedTS,
+		Alerts:        alerts,
+	}
+	s.alertsSnapshot.Store(resp)
+	return resp
+}
+
+// getOrRefreshAlerts returns the cached service alerts snapshot, refreshing if uninitialized
+// or older than 60 seconds.
+func (s *Service) getOrRefreshAlerts(ctx context.Context) *SystemAlertsResponse {
+	snap := s.alertsSnapshot.Load()
+	if snap != nil {
+		if t, err := time.Parse(time.RFC3339, snap.LastUpdated); err == nil && time.Since(t) < 60*time.Second {
+			return snap
+		}
+	}
+
+	s.alertsRefreshMu.Lock()
+	defer s.alertsRefreshMu.Unlock()
+
+	snap = s.alertsSnapshot.Load()
+	if snap != nil {
+		if t, err := time.Parse(time.RFC3339, snap.LastUpdated); err == nil && time.Since(t) < 60*time.Second {
+			return snap
+		}
+	}
+
+	return s.refreshAlerts(ctx)
+}
+
+// GetAllAlerts returns the system-wide snapshot of all active and upcoming service alerts.
+func (s *Service) GetAllAlerts(ctx context.Context) (*SystemAlertsResponse, error) {
+	return s.getOrRefreshAlerts(ctx), nil
+}
+
+// StartBackgroundSync populates the system train and alert caches immediately and refreshes them periodically.
 func (s *Service) StartBackgroundSync(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = 10 * time.Second
 	}
 	go func() {
 		s.refreshTrains(ctx)
+		s.refreshAlerts(ctx)
 
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
+		trainTicker := time.NewTicker(interval)
+		defer trainTicker.Stop()
+		alertTicker := time.NewTicker(60 * time.Second)
+		defer alertTicker.Stop()
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-trainTicker.C:
 				s.refreshTrains(ctx)
+			case <-alertTicker.C:
+				s.refreshAlerts(ctx)
 			}
 		}
 	}()

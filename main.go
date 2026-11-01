@@ -76,6 +76,20 @@ func main() {
 		writeJSON(w, http.StatusOK, trains)
 	})
 
+	// GET /api/alerts -> returns system-wide snapshot of active and upcoming service alerts
+	mux.HandleFunc("/api/alerts", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		defer cancel()
+
+		alerts, err := svc.GetAllAlerts(ctx)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Cache-Control", "no-cache")
+		writeJSON(w, http.StatusOK, alerts)
+	})
+
 	// GET /api/board?station=A40&route=A&mode=auto|live|simulated
 	mux.HandleFunc("/api/board", func(w http.ResponseWriter, r *http.Request) {
 		stationID := r.URL.Query().Get("station")
@@ -163,7 +177,9 @@ func main() {
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
+	if w.Header().Get("Cache-Control") == "" {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
 }
