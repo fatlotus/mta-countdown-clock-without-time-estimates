@@ -1,6 +1,6 @@
 // MTA.rip Service Worker — Subway Offline & Transit Wireless Resilience
-const CACHE_SHELL = "mta-shell-v6";
-const CACHE_API = "mta-api-v6";
+const CACHE_SHELL = "mta-shell-v7";
+const CACHE_API = "mta-api-v7";
 const API_TIMEOUT_MS = 2500;
 
 const SHELL_ASSETS = [

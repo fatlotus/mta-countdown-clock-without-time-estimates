@@ -300,3 +300,145 @@ func TestAlertsFeedParsingAndStationProjection(t *testing.T) {
 		}
 	}
 }
+
+func TestAlertTextCleaningAndSanitization(t *testing.T) {
+	// 1. Verify cleanAlertText HTML stripping, line break preservation, and entity unescaping
+	rawHTML := "<p> Trains run via <strong>[F]</strong>.<br/>Take shuttle bus.</p>"
+	cleaned := cleanAlertText(rawHTML)
+	expectedCleaned := "Trains run via [F].\nTake shuttle bus."
+	if cleaned != expectedCleaned {
+		t.Errorf("cleanAlertText(%q) = %q; want %q", rawHTML, cleaned, expectedCleaned)
+	}
+
+	// 2. Verify icon replacements
+	rawIcons := "[accessibility icon] Station is accessible. Take [shuttle bus icon] or [bus icon] to connection."
+	cleanedIcons := cleanAlertText(rawIcons)
+	expectedIcons := "♿ Station is accessible. Take 🚌 or 🚌 to connection."
+	if cleanedIcons != expectedIcons {
+		t.Errorf("cleanAlertText with icons = %q; want %q", cleanedIcons, expectedIcons)
+	}
+
+	accessibleVariant := "[accessible icon] Accessible platform."
+	if got := cleanAlertText(accessibleVariant); got != "♿ Accessible platform." {
+		t.Errorf("cleanAlertText with [accessible icon] = %q; want %q", got, "♿ Accessible platform.")
+	}
+
+	// 3. Verify extractTranslatedText with empty "en" and "<p></p>" in "en-html" produces Description == ""
+	tsEmpty := &gtfs.TranslatedString{
+		Translation: []*gtfs.TranslatedString_Translation{
+			{Text: strPtr(""), Language: strPtr("en")},
+			{Text: strPtr("<p></p>"), Language: strPtr("en-html")},
+		},
+	}
+	if got := extractTranslatedText(tsEmpty); got != "" {
+		t.Errorf("extractTranslatedText with empty en and <p></p> en-html = %q; want empty string", got)
+	}
+
+	// 4. Verify parseFeedToAlerts produces Description == "" when alert description has empty en and <p></p> en-html
+	feed := &gtfs.FeedMessage{
+		Header: &gtfs.FeedHeader{
+			Timestamp: uint64Ptr(uint64(time.Now().Unix())),
+		},
+		Entity: []*gtfs.FeedEntity{
+			{
+				Id: strPtr("lmm:planned_work:36216"),
+				Alert: &gtfs.Alert{
+					HeaderText: &gtfs.TranslatedString{
+						Translation: []*gtfs.TranslatedString_Translation{
+							{Text: strPtr("Planned Work Notice"), Language: strPtr("en")},
+						},
+					},
+					DescriptionText: &gtfs.TranslatedString{
+						Translation: []*gtfs.TranslatedString_Translation{
+							{Text: strPtr(""), Language: strPtr("en")},
+							{Text: strPtr("<p></p>"), Language: strPtr("en-html")},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	alerts, _ := parseFeedToAlerts(feed, time.Now().Unix())
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 alert parsed, got %d", len(alerts))
+	}
+	if alerts[0].Description != "" {
+		t.Errorf("expected alerts[0].Description == \"\", got %q", alerts[0].Description)
+	}
+}
+
+func TestInferAlertStopIDsFromText(t *testing.T) {
+	staticPath := filepath.Join("..", "..", "data", "mta_static.json")
+	svc, err := NewService(staticPath)
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	// lmm:planned_work:36216:
+	// "Some stairways at Fulton St [G], 59 St-Columbus Circle [1][A][C][D], 66 St [1], 72 St [C] and 81 St [C] Stations may be closed during the TCS New York City Marathon"
+	headerText := "Some stairways at Fulton St [G], 59 St-Columbus Circle [1][A][C][D], 66 St [1], 72 St [C] and 81 St [C] Stations may be closed during the TCS New York City Marathon"
+	routes := []string{"1", "A", "C", "D", "G"}
+
+	inferred := inferAlertStopIDs(svc.static.Stations, headerText, routes, "")
+	inferredSet := make(map[string]bool)
+	for _, id := range inferred {
+		inferredSet[id] = true
+	}
+
+	// Must NOT match High St (A40) or Manhattan Fulton St (A38)
+	if inferredSet["A40"] {
+		t.Errorf("inferred stop IDs should NOT include High St (A40)")
+	}
+	if inferredSet["A38"] {
+		t.Errorf("inferred stop IDs should NOT include Manhattan Fulton St (A38)")
+	}
+
+	// Must match Brooklyn Fulton St (G36), 59 St-Columbus Circle (A24 & 125),
+	// 66 St-Lincoln Center (124), 72 St (A22), and 81 St-Museum of Natural History (A21)
+	expectedIDs := []string{"G36", "A24", "125", "124", "A22", "A21"}
+	for _, id := range expectedIDs {
+		if !inferredSet[id] {
+			t.Errorf("expected inferred stop ID %q in inferredSet, got %+v", id, inferred)
+		}
+	}
+
+	// Verify projectStationAlerts for High St (A40): alert with no stop_ids in InformedEntity
+	// does NOT show up at High St
+	highSt, ok := svc.GetStation("A40")
+	if !ok {
+		t.Fatalf("station A40 not found")
+	}
+
+	marathonAlert := ServiceAlert{
+		ID:         "lmm:planned_work:36216",
+		AlertType:  "PLANNED WORK",
+		Routes:     routes,
+		StopIDs:    []string{}, // Omitted from feed entity
+		HeaderText: headerText,
+	}
+
+	stationAlerts, _, _ := svc.projectStationAlerts(highSt, map[string]bool{"A": true, "C": true}, []ServiceAlert{marathonAlert}, time.Now().Unix())
+	for _, al := range stationAlerts {
+		if al.ID == marathonAlert.ID {
+			t.Errorf("marathon alert %q should NOT have matched High St stationAlerts!", al.ID)
+		}
+	}
+
+	// But it DOES match Brooklyn Fulton St (G36)
+	fultonG, ok := svc.GetStation("G36")
+	if !ok {
+		t.Fatalf("station G36 not found")
+	}
+	fultonAlerts, _, _ := svc.projectStationAlerts(fultonG, map[string]bool{"G": true}, []ServiceAlert{marathonAlert}, time.Now().Unix())
+	var matchedG36 bool
+	for _, al := range fultonAlerts {
+		if al.ID == marathonAlert.ID {
+			matchedG36 = true
+			break
+		}
+	}
+	if !matchedG36 {
+		t.Errorf("marathon alert %q SHOULD have matched Brooklyn Fulton St (G36)!", marathonAlert.ID)
+	}
+}

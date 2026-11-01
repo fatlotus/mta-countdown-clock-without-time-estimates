@@ -908,7 +908,7 @@ func (s *Service) refreshAlerts(ctx context.Context) *SystemAlertsResponse {
 	feedTS := nowSec
 
 	if err == nil && feed != nil {
-		parsedAlerts, ts := parseFeedToAlerts(feed, nowSec)
+		parsedAlerts, ts := s.parseFeedToAlerts(feed, nowSec)
 		alerts = parsedAlerts
 		if ts != 0 {
 			feedTS = ts

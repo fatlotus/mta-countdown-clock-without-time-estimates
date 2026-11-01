@@ -477,6 +477,45 @@ body {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
+.alert-icon-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  font-size: 0.85rem;
+  border-radius: 4px;
+  vertical-align: middle;
+  margin: 0 2px;
+  flex-shrink: 0;
+  line-height: 1;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.alert-icon-badge.accessible {
+  background-color: #0039a6;
+  color: #ffffff;
+}
+
+.alert-icon-badge.shuttle-bus {
+  background-color: #0284c7;
+  color: #ffffff;
+}
+
+.alert-icon-badge.elevator {
+  background-color: #475569;
+  color: #ffffff;
+}
+
+.alert-icon-badge.generic {
+  background-color: #475569;
+  color: #ffffff;
+  padding: 0 4px;
+  width: auto;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
 /* Recessed Architectural Corridor Switcher Bays in Vignelli Header */
 .corridor-switcher-pill {
   display: inline-flex;
@@ -1871,6 +1910,22 @@ a.strip-node:hover {
   background: rgba(100, 116, 139, 0.12);
   border-color: rgba(100, 116, 139, 0.4);
   color: #334155;
+}
+
+[data-theme="light"] .alert-icon-badge.accessible {
+  background-color: #0039a6;
+  color: #ffffff;
+}
+
+[data-theme="light"] .alert-icon-badge.shuttle-bus {
+  background-color: #0369a1;
+  color: #ffffff;
+}
+
+[data-theme="light"] .alert-icon-badge.elevator,
+[data-theme="light"] .alert-icon-badge.generic {
+  background-color: #64748b;
+  color: #ffffff;
 }
 
 /* Obvious Staleness (>30s): 95% Grayscale + 45% Translucent + Amber Warning Halo */

@@ -671,7 +671,10 @@
       }
 
       // Station & direction matching
-      const stopIDs = Array.isArray(al.stop_ids) ? al.stop_ids : [];
+      let stopIDs = Array.isArray(al.stop_ids) ? al.stop_ids : [];
+      if (stopIDs.length === 0) {
+        stopIDs = inferAlertStopIDs(al.header_text, al.routes, al.direction);
+      }
       if (stopIDs.length === 0) {
         // Line-wide alert
         const matchesN = !al.direction || al.direction === "N";
@@ -1301,10 +1304,170 @@
     });
   }
 
+  function escapeRegex(str) {
+    return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function sanitizeAlertPlainText(text) {
+    if (!text) return "";
+    let s = String(text)
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(?:p|div)>/gi, "\n")
+      .replace(/<li\b[^>]*>/gi, "\n• ")
+      .replace(/<[^>]+>/g, "");
+    s = s
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n");
+    return s.trim();
+  }
+
+  function inferAlertStopIDs(headerText, alertRoutes = [], direction = "") {
+    if (!headerText || !Array.isArray(allStations) || allStations.length === 0) {
+      return [];
+    }
+
+    const lower = headerText.toLowerCase();
+    if (
+      lower.includes("with delays") ||
+      lower.includes("are delayed") ||
+      lower.includes("runs every") ||
+      lower.includes("run every") ||
+      lower.includes("runs approximately every")
+    ) {
+      return [];
+    }
+
+    // Step A: Match <Station Name> [<Route>]([Route])* patterns
+    const stepAIDs = [];
+    const reStepA = /(?:at|near|to|from|and|,)\s+([A-Z0-9][A-Za-z0-9\s\-\/\.]+?)\s*(\[[A-Za-z0-9]+\](?:\[[A-Za-z0-9]+\])*)/gi;
+    const reBracketTags = /\[([A-Za-z0-9]+)\]/g;
+    const reLeadingPre = /^(?:at|near|to|from|and)\s+/i;
+
+    let match;
+    const seen = new Set();
+    while ((match = reStepA.exec(headerText)) !== null) {
+      let rawName = (match[1] || "").trim().replace(reLeadingPre, "").trim();
+      if (!rawName) continue;
+
+      const tagBlock = match[2] || "";
+      const routeTags = [];
+      let tagMatch;
+      while ((tagMatch = reBracketTags.exec(tagBlock)) !== null) {
+        routeTags.push(getCleanRouteId(tagMatch[1]));
+      }
+      if (routeTags.length === 0) continue;
+
+      const rawNameLower = rawName.toLowerCase();
+      allStations.forEach((st) => {
+        const stRoutes = Array.isArray(st.routes) ? st.routes : [];
+        const servesRoute = routeTags.some((r) =>
+          stRoutes.some((stR) => getCleanRouteId(stR) === r)
+        );
+        if (!servesRoute) return;
+
+        const stNameLower = (st.name || "").toLowerCase();
+        if (stNameLower === rawNameLower || stNameLower.startsWith(rawNameLower + "-")) {
+          const id = direction ? st.id + direction : st.id;
+          if (!seen.has(id)) {
+            seen.add(id);
+            stepAIDs.push(id);
+          }
+        }
+      });
+    }
+
+    const isReroute =
+      lower.includes("from ") &&
+      lower.includes(" to ") &&
+      (lower.includes("run via") ||
+        lower.includes("running via") ||
+        lower.includes("express from") ||
+        lower.includes("local from"));
+
+    if (stepAIDs.length > 0 && !isReroute) {
+      return stepAIDs;
+    }
+
+    // Step B: Match full station names on alertRoutes
+    const preferredBoroughs = [];
+    if (lower.includes("manhattan")) preferredBoroughs.push("Manhattan");
+    if (lower.includes("brooklyn")) preferredBoroughs.push("Brooklyn");
+    if (lower.includes("queens")) preferredBoroughs.push("Queens");
+    if (lower.includes("bronx")) preferredBoroughs.push("Bronx");
+    if (lower.includes("staten island")) preferredBoroughs.push("Staten Island");
+
+    let matchedStations = [];
+    const cleanAlertRoutes = (alertRoutes || []).map(getCleanRouteId);
+
+    allStations.forEach((st) => {
+      const stRoutes = (st.routes || []).map(getCleanRouteId);
+      if (cleanAlertRoutes.length > 0) {
+        const servesRoute = cleanAlertRoutes.some((ar) => stRoutes.includes(ar));
+        if (!servesRoute) return;
+      }
+
+      const escaped = escapeRegex(st.name || "");
+      if (!escaped) return;
+      const reStation = new RegExp(`(?:^|[^a-zA-Z0-9])${escaped}(?:$|[^a-zA-Z0-9\\-])`, "i");
+      if (reStation.test(headerText)) {
+        matchedStations.push(st);
+      }
+    });
+
+    if (matchedStations.length === 0) {
+      return [];
+    }
+
+    if (preferredBoroughs.length > 0) {
+      const boroughMatches = matchedStations.filter((st) =>
+        preferredBoroughs.some((pb) => (st.borough || "").toLowerCase() === pb.toLowerCase())
+      );
+      if (boroughMatches.length > 0) {
+        matchedStations = boroughMatches;
+      }
+    }
+
+    const result = [];
+    const seenB = new Set();
+    matchedStations.forEach((st) => {
+      const id = direction ? st.id + direction : st.id;
+      if (!seenB.has(id)) {
+        seenB.add(id);
+        result.push(id);
+      }
+    });
+
+    return result;
+  }
+
   function formatAlertTextWithBullets(text) {
     if (!text) return "";
-    const escaped = escapeHtml(text);
-    return escaped.replace(/\[([A-Za-z0-9]+)\]/g, (match, routeId) => {
+    const sanitized = sanitizeAlertPlainText(text);
+    if (!sanitized) return "";
+    let formatted = escapeHtml(sanitized);
+
+    // Replace known icon tokens & emojis with styled icon badges
+    formatted = formatted.replace(
+      /\[(?:accessibility|accessible)\s+icon\]|♿/gi,
+      '<span class="alert-icon-badge accessible" role="img" aria-label="Accessible" title="ADA Accessible">♿</span>'
+    );
+    formatted = formatted.replace(
+      /\[(?:shuttle\s+)?bus\s+icon\]|🚌/gi,
+      '<span class="alert-icon-badge shuttle-bus" role="img" aria-label="Shuttle Bus" title="Free Shuttle Bus">🚌</span>'
+    );
+    formatted = formatted.replace(
+      /\[elevator\s+icon\]|🛗/gi,
+      '<span class="alert-icon-badge elevator" role="img" aria-label="Elevator" title="Elevator">🛗</span>'
+    );
+    formatted = formatted.replace(/\[([A-Za-z0-9\s-]+)\s+icon\]/gi, (match, name) => {
+      const cleanName = (name || "").trim();
+      return `<span class="alert-icon-badge generic" role="img" aria-label="${escapeHtml(cleanName)}" title="${escapeHtml(cleanName)}">${escapeHtml(cleanName)}</span>`;
+    });
+
+    // Replace [Route] tokens with inline MTA route bullets
+    formatted = formatted.replace(/\[([A-Za-z0-9]+)\]/g, (match, routeId) => {
       const upper = routeId.toUpperCase();
       const isKnown = Boolean(
         routeMap[upper] ||
@@ -1321,6 +1484,8 @@
       }
       return match;
     });
+
+    return formatted;
   }
 
   function renderStationAlerts(alerts, st) {
@@ -1336,6 +1501,11 @@
     const fragment = document.createDocumentFragment();
 
     alerts.forEach((al) => {
+      const cleanHeader = sanitizeAlertPlainText(al.header_text);
+      const cleanDesc = sanitizeAlertPlainText(al.description);
+
+      if (!cleanHeader && !cleanDesc) return;
+
       const card = document.createElement("article");
       const isUpcoming = !al.is_active_now;
       card.className = `station-alert-card ${isUpcoming ? "upcoming" : ""}`.trim();
@@ -1373,24 +1543,28 @@
 
       card.appendChild(header);
 
-      if (al.header_text) {
+      if (cleanHeader) {
         const titleEl = document.createElement("h3");
         titleEl.className = "alert-title";
-        titleEl.innerHTML = formatAlertTextWithBullets(al.header_text);
+        titleEl.innerHTML = formatAlertTextWithBullets(cleanHeader);
         card.appendChild(titleEl);
       }
 
-      if (al.description && al.description.trim() !== (al.header_text || "").trim()) {
+      if (cleanDesc && cleanDesc !== cleanHeader) {
         const descEl = document.createElement("div");
         descEl.className = "alert-desc";
-        descEl.innerHTML = formatAlertTextWithBullets(al.description);
+        descEl.innerHTML = formatAlertTextWithBullets(cleanDesc);
         card.appendChild(descEl);
       }
 
       fragment.appendChild(card);
     });
 
-    stationAlertsContainerEl.appendChild(fragment);
+    if (fragment.children.length === 0) {
+      stationAlertsContainerEl.classList.add("hidden");
+    } else {
+      stationAlertsContainerEl.appendChild(fragment);
+    }
   }
 
   function renderBoard(board) {

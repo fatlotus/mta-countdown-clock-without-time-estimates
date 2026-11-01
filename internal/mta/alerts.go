@@ -2,37 +2,265 @@ package mta
 
 import (
 	"fmt"
+	"html"
+	"regexp"
 	"strings"
 
 	"github.com/MobilityData/gtfs-realtime-bindings/golang/gtfs"
 )
 
+var (
+	reBreakTags        = regexp.MustCompile(`(?i)<(?:br\s*/?|/p|/div)>`)
+	reListItem         = regexp.MustCompile(`(?i)<li\b[^>]*>`)
+	reAllTags          = regexp.MustCompile(`<[^>]+>`)
+	reAccessIcon       = regexp.MustCompile(`(?i)\[accessib(?:le|ility)\s+icon\]`)
+	reBusIcon          = regexp.MustCompile(`(?i)\[(?:shuttle\s+)?bus\s+icon\]`)
+	reMultipleNewlines = regexp.MustCompile(`\n{3,}`)
+
+	reStepA       = regexp.MustCompile(`(?i)(?:at|near|to|from|and|,)\s+([A-Z0-9][A-Za-z0-9\s\-\/\.]+?)\s*(\[[A-Za-z0-9]+\](?:\[[A-Za-z0-9]+\])*)`)
+	reBracketTags = regexp.MustCompile(`\[([A-Za-z0-9]+)\]`)
+	reLeadingPre  = regexp.MustCompile(`(?i)^(?:at|near|to|from|and)\s+`)
+)
+
+func cleanRouteID(r string) string {
+	r = strings.TrimSpace(r)
+	switch r {
+	case "SIR":
+		return "SI"
+	case "S":
+		return "GS"
+	default:
+		return r
+	}
+}
+
+// inferAlertStopIDs infers affected station stop IDs from alert header text when stop_ids is omitted.
+func inferAlertStopIDs(stations []Station, headerText string, alertRoutes []string, direction string) []string {
+	if headerText == "" || len(stations) == 0 {
+		return nil
+	}
+
+	lower := strings.ToLower(headerText)
+	if strings.Contains(lower, "with delays") ||
+		strings.Contains(lower, "are delayed") ||
+		strings.Contains(lower, "runs every") ||
+		strings.Contains(lower, "run every") ||
+		strings.Contains(lower, "runs approximately every") {
+		return nil
+	}
+
+	// Step A — Match <Station Name> [<Route>]([Route])* patterns
+	var stepAIDs []string
+	matches := reStepA.FindAllStringSubmatch(headerText, -1)
+	if len(matches) > 0 {
+		seen := make(map[string]bool)
+		for _, m := range matches {
+			if len(m) < 3 {
+				continue
+			}
+			rawName := strings.TrimSpace(m[1])
+			rawName = reLeadingPre.ReplaceAllString(rawName, "")
+			rawName = strings.TrimSpace(rawName)
+			if rawName == "" {
+				continue
+			}
+
+			routeTagMatches := reBracketTags.FindAllStringSubmatch(m[2], -1)
+			if len(routeTagMatches) == 0 {
+				continue
+			}
+			var routeTags []string
+			for _, rtm := range routeTagMatches {
+				if len(rtm) >= 2 {
+					routeTags = append(routeTags, cleanRouteID(rtm[1]))
+				}
+			}
+			if len(routeTags) == 0 {
+				continue
+			}
+
+			rawNameLower := strings.ToLower(rawName)
+			for _, st := range stations {
+				servesRoute := false
+				for _, r := range routeTags {
+					for _, stR := range st.Routes {
+						if cleanRouteID(stR) == r {
+							servesRoute = true
+							break
+						}
+					}
+					if servesRoute {
+						break
+					}
+				}
+				if !servesRoute {
+					continue
+				}
+
+				stNameLower := strings.ToLower(st.Name)
+				if stNameLower == rawNameLower || strings.HasPrefix(stNameLower, rawNameLower+"-") {
+					id := st.ID
+					if direction != "" {
+						id += direction
+					}
+					if !seen[id] {
+						seen[id] = true
+						stepAIDs = append(stepAIDs, id)
+					}
+				}
+			}
+		}
+
+		isReroute := strings.Contains(lower, "from ") && strings.Contains(lower, " to ") &&
+			(strings.Contains(lower, "run via") || strings.Contains(lower, "running via") ||
+				strings.Contains(lower, "express from") || strings.Contains(lower, "local from"))
+
+		if len(stepAIDs) > 0 && !isReroute {
+			return stepAIDs
+		}
+	}
+
+	// Step B — Match full station names on alertRoutes
+	var preferredBoroughs []string
+	if strings.Contains(lower, "manhattan") {
+		preferredBoroughs = append(preferredBoroughs, "Manhattan")
+	}
+	if strings.Contains(lower, "brooklyn") {
+		preferredBoroughs = append(preferredBoroughs, "Brooklyn")
+	}
+	if strings.Contains(lower, "queens") {
+		preferredBoroughs = append(preferredBoroughs, "Queens")
+	}
+	if strings.Contains(lower, "bronx") {
+		preferredBoroughs = append(preferredBoroughs, "Bronx")
+	}
+	if strings.Contains(lower, "staten island") {
+		preferredBoroughs = append(preferredBoroughs, "Staten Island")
+	}
+
+	var matchedStations []Station
+	for _, st := range stations {
+		if len(alertRoutes) > 0 {
+			servesRoute := false
+			for _, ar := range alertRoutes {
+				cleanAR := cleanRouteID(ar)
+				for _, stR := range st.Routes {
+					if cleanRouteID(stR) == cleanAR {
+						servesRoute = true
+						break
+					}
+				}
+				if servesRoute {
+					break
+				}
+			}
+			if !servesRoute {
+				continue
+			}
+		}
+
+		escaped := regexp.QuoteMeta(st.Name)
+		reStation := regexp.MustCompile(`(?i)(?:^|[^a-zA-Z0-9])` + escaped + `(?:$|[^a-zA-Z0-9\-])`)
+		if reStation.MatchString(headerText) {
+			matchedStations = append(matchedStations, st)
+		}
+	}
+
+	if len(matchedStations) == 0 {
+		return nil
+	}
+
+	if len(preferredBoroughs) > 0 {
+		var boroughMatches []Station
+		for _, st := range matchedStations {
+			for _, pb := range preferredBoroughs {
+				if strings.EqualFold(st.Borough, pb) {
+					boroughMatches = append(boroughMatches, st)
+					break
+				}
+			}
+		}
+		if len(boroughMatches) > 0 {
+			matchedStations = boroughMatches
+		}
+	}
+
+	seen := make(map[string]bool)
+	var result []string
+	for _, st := range matchedStations {
+		id := st.ID
+		if direction != "" {
+			id += direction
+		}
+		if !seen[id] {
+			seen[id] = true
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
+// cleanAlertText strips HTML formatting, converts accessibility and transit icons,
+// unescapes HTML entities, and normalizes line breaks in alert text.
+func cleanAlertText(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	s := reBreakTags.ReplaceAllString(raw, "\n")
+	s = reListItem.ReplaceAllString(s, "\n• ")
+	s = reAllTags.ReplaceAllString(s, "")
+	s = html.UnescapeString(s)
+	s = reAccessIcon.ReplaceAllString(s, "♿")
+	s = reBusIcon.ReplaceAllString(s, "🚌")
+
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " \t\r")
+	}
+	s = strings.Join(lines, "\n")
+	s = reMultipleNewlines.ReplaceAllString(s, "\n\n")
+	return strings.TrimSpace(s)
+}
+
 // extractTranslatedText extracts plain English or first non-empty translation text from a TranslatedString.
+// It prefers "en" or "en-us" first and falls back to other translations only if "en"/"en-us" does not exist or is empty.
+// Both paths pass through cleanAlertText so HTML tags (e.g. "<p></p>") are stripped.
 func extractTranslatedText(ts *gtfs.TranslatedString) string {
 	if ts == nil {
 		return ""
 	}
+	var enText string
 	var fallback string
 	for _, tr := range ts.GetTranslation() {
-		text := strings.TrimSpace(tr.GetText())
-		if text == "" {
+		cleaned := cleanAlertText(tr.GetText())
+		if cleaned == "" {
 			continue
 		}
 		lang := strings.ToLower(tr.GetLanguage())
 		if lang == "en" || lang == "en-us" {
-			return text
+			enText = cleaned
+			break
 		}
 		if fallback == "" {
-			fallback = text
+			fallback = cleaned
 		}
+	}
+	if enText != "" {
+		return enText
 	}
 	return fallback
 }
 
 // parseFeedToAlerts parses a GTFS-RT Alerts feed into structured ServiceAlert objects.
-func parseFeedToAlerts(feed *gtfs.FeedMessage, nowSec int64) ([]ServiceAlert, int64) {
+// If stations catalog is provided, alerts with missing stop_ids will have affected stations inferred from headerText.
+func parseFeedToAlerts(feed *gtfs.FeedMessage, nowSec int64, stations ...[]Station) ([]ServiceAlert, int64) {
 	if feed == nil {
 		return []ServiceAlert{}, nowSec
+	}
+
+	var stList []Station
+	if len(stations) > 0 {
+		stList = stations[0]
 	}
 
 	feedTS := int64(0)
@@ -133,6 +361,9 @@ func parseFeedToAlerts(feed *gtfs.FeedMessage, nowSec int64) ([]ServiceAlert, in
 			} else if hasDir1 && !hasDir0 {
 				direction = "S"
 			}
+			if len(stList) > 0 {
+				stopIDs = inferAlertStopIDs(stList, headerText, routes, direction)
+			}
 		}
 
 		entityID := strings.TrimSpace(entity.GetId())
@@ -158,6 +389,11 @@ func parseFeedToAlerts(feed *gtfs.FeedMessage, nowSec int64) ([]ServiceAlert, in
 	}
 
 	return alerts, feedTS
+}
+
+// parseFeedToAlerts on *Service parses a GTFS-RT Alerts feed using the service station catalog.
+func (s *Service) parseFeedToAlerts(feed *gtfs.FeedMessage, nowSec int64) ([]ServiceAlert, int64) {
+	return parseFeedToAlerts(feed, nowSec, s.static.Stations)
 }
 
 // projectStationAlerts projects system alerts to a target station and its platforms.
@@ -199,7 +435,12 @@ func (s *Service) projectStationAlerts(st Station, allowedRoutesSet map[string]b
 		}
 
 		// 3. Station & direction matching
-		if len(al.StopIDs) == 0 {
+		stopIDs := al.StopIDs
+		if len(stopIDs) == 0 && len(s.static.Stations) > 0 {
+			stopIDs = inferAlertStopIDs(s.static.Stations, al.HeaderText, al.Routes, al.Direction)
+		}
+
+		if len(stopIDs) == 0 {
 			// Line-wide alert
 			matchesN := al.Direction == "" || al.Direction == "N"
 			matchesS := al.Direction == "" || al.Direction == "S"
@@ -215,9 +456,9 @@ func (s *Service) projectStationAlerts(st Station, allowedRoutesSet map[string]b
 			}
 		} else {
 			// Station-specific alert
-			hasBoth := containsStr(al.StopIDs, st.ID)
-			hasN := hasBoth || containsStr(al.StopIDs, st.ID+"N")
-			hasS := hasBoth || containsStr(al.StopIDs, st.ID+"S")
+			hasBoth := containsStr(stopIDs, st.ID)
+			hasN := hasBoth || containsStr(stopIDs, st.ID+"N")
+			hasS := hasBoth || containsStr(stopIDs, st.ID+"S")
 			if !hasN && !hasS {
 				continue
 			}
