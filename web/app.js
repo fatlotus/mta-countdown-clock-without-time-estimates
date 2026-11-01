@@ -56,6 +56,8 @@
 
   const STORAGE_KEY_STATIONS = "mta_rip_cached_stations";
   const STORAGE_KEY_TRAINS = "mta_rip_cached_trains";
+  const STORAGE_KEY_ALERTS = "mta_rip_cached_alerts";
+  const ALERTS_REFRESH_INTERVAL_MS = 60000;
 
   let allStations = [];
   let routeMap = {};
@@ -78,6 +80,8 @@
   let isCurrentDataStale = false;
   let isCurrentDataExpired = false;
   let latestSystemTrains = null;
+  let latestSystemAlerts = null;
+  let isSyncingAlerts = false;
   let reconnectDebounceTimer = null;
 
   function applyStaticCatalog(data) {
@@ -123,6 +127,13 @@
     }
   } catch (_) {}
 
+  try {
+    const rawAlerts = window.localStorage.getItem(STORAGE_KEY_ALERTS);
+    if (rawAlerts) {
+      latestSystemAlerts = JSON.parse(rawAlerts);
+    }
+  } catch (_) {}
+
   // Sync theme with system prefers-color-scheme
   const colorSchemeMedia = window.matchMedia
     ? window.matchMedia("(prefers-color-scheme: dark)")
@@ -151,6 +162,7 @@
   const staleBannerEl = document.getElementById("stale-offline-banner");
   const staleBannerBadgeEl = document.getElementById("stale-banner-badge");
   const staleBannerTextEl = document.getElementById("stale-banner-text");
+  const stationAlertsContainerEl = document.getElementById("station-alerts-container");
 
   function updateStaleBanner(show, badge = "", msg = "", isExpired = false) {
     if (!staleBannerEl) return;
@@ -285,10 +297,17 @@
 
       // Non-blocking background sync with strict lie-fi timeouts
       syncTrains();
+      syncAlerts();
       syncCatalog();
       refreshTimer = setInterval(syncTrains, REFRESH_INTERVAL_MS);
-    } else if (!latestSystemTrains) {
-      syncTrains();
+      setInterval(syncAlerts, ALERTS_REFRESH_INTERVAL_MS);
+    } else {
+      if (!latestSystemTrains) {
+        syncTrains();
+      }
+      if (!latestSystemAlerts) {
+        syncAlerts();
+      }
     }
   }
 
@@ -595,20 +614,163 @@
       last_updated: new Date().toISOString(),
     };
 
-    if (!latestSystemTrains || !Array.isArray(latestSystemTrains.trains)) {
-      board.data_source = "OFFLINE_NO_TRAINS";
-      board.northbound.service_note = "No train location data available offline.";
-      board.southbound.service_note = "No train location data available offline.";
-      return board;
-    }
-
-    const trains = latestSystemTrains.trains;
     const candidateRoutes =
       corridor && Array.isArray(corridor.trunk_routes) && corridor.trunk_routes.length > 0
         ? corridor.trunk_routes
         : activeRoutes;
     const allowedRoutesSet = new Set(candidateRoutes);
     const isExpressSet = new Set(trackMap ? trackMap.express_routes || [] : []);
+
+    // Alerts projection
+    const rawAlerts =
+      latestSystemAlerts && Array.isArray(latestSystemAlerts.alerts)
+        ? latestSystemAlerts.alerts
+        : [];
+    const nowSec = getCalibratedNowSec();
+
+    const stationAlerts = [];
+    const northAlerts = [];
+    const southAlerts = [];
+
+    rawAlerts.forEach((al) => {
+      let isActiveNow = false;
+      let isWithinWindow = false;
+
+      if (!Array.isArray(al.active_periods) || al.active_periods.length === 0) {
+        isActiveNow = true;
+        isWithinWindow = true;
+      } else {
+        for (let i = 0; i < al.active_periods.length; i++) {
+          const ap = al.active_periods[i];
+          if (!ap) continue;
+          const start = ap.start || 0;
+          const end = ap.end || 0;
+          if (nowSec >= start && (end === 0 || nowSec <= end)) {
+            isActiveNow = true;
+            isWithinWindow = true;
+            break;
+          } else if (start > nowSec && start <= nowSec + 86400) {
+            isWithinWindow = true;
+          }
+        }
+      }
+
+      if (!isWithinWindow) return;
+
+      // Route match check
+      if (allowedRoutesSet.size > 0 && Array.isArray(al.routes) && al.routes.length > 0) {
+        let routeMatched = false;
+        for (let i = 0; i < al.routes.length; i++) {
+          const r = al.routes[i];
+          if (allowedRoutesSet.has(r) || allowedRoutesSet.has(getCleanRouteId(r))) {
+            routeMatched = true;
+            break;
+          }
+        }
+        if (!routeMatched) return;
+      }
+
+      // Station & direction matching
+      const stopIDs = Array.isArray(al.stop_ids) ? al.stop_ids : [];
+      if (stopIDs.length === 0) {
+        // Line-wide alert
+        const matchesN = !al.direction || al.direction === "N";
+        const matchesS = !al.direction || al.direction === "S";
+        if (!matchesN && !matchesS) return;
+
+        stationAlerts.push({
+          ...al,
+          is_active_now: isActiveNow,
+          direction: al.direction || "",
+        });
+        if (matchesN) {
+          northAlerts.push({
+            ...al,
+            is_active_now: isActiveNow,
+            direction: al.direction === "N" ? "N" : "",
+          });
+        }
+        if (matchesS) {
+          southAlerts.push({
+            ...al,
+            is_active_now: isActiveNow,
+            direction: al.direction === "S" ? "S" : "",
+          });
+        }
+      } else {
+        // Station-specific alert
+        const hasBoth = stopIDs.includes(st.id);
+        const hasN = hasBoth || stopIDs.includes(st.id + "N");
+        const hasS = hasBoth || stopIDs.includes(st.id + "S");
+        if (!hasN && !hasS) return;
+
+        const matchesN = hasN && (!al.direction || al.direction === "N");
+        const matchesS = hasS && (!al.direction || al.direction === "S");
+        if (!matchesN && !matchesS) return;
+
+        const stationDir = hasN && !hasS ? "N" : hasS && !hasN ? "S" : al.direction || "";
+        stationAlerts.push({
+          ...al,
+          is_active_now: isActiveNow,
+          direction: stationDir,
+        });
+        if (matchesN) {
+          northAlerts.push({
+            ...al,
+            is_active_now: isActiveNow,
+            direction: "N",
+          });
+        }
+        if (matchesS) {
+          southAlerts.push({
+            ...al,
+            is_active_now: isActiveNow,
+            direction: "S",
+          });
+        }
+      }
+    });
+
+    function getAlertMinStart(al) {
+      if (!Array.isArray(al.active_periods) || al.active_periods.length === 0) return 0;
+      let min = Infinity;
+      for (let i = 0; i < al.active_periods.length; i++) {
+        const ap = al.active_periods[i];
+        if (ap && typeof ap.start === "number" && ap.start < min) {
+          min = ap.start;
+        }
+      }
+      return min === Infinity ? 0 : min;
+    }
+
+    const sortAlerts = (a, b) => {
+      if (a.is_active_now && !b.is_active_now) return -1;
+      if (!a.is_active_now && b.is_active_now) return 1;
+      return getAlertMinStart(a) - getAlertMinStart(b);
+    };
+
+    stationAlerts.sort(sortAlerts);
+    northAlerts.sort(sortAlerts);
+    southAlerts.sort(sortAlerts);
+
+    board.alerts = stationAlerts;
+    board.northbound.alerts = northAlerts;
+    board.southbound.alerts = southAlerts;
+
+    if (!latestSystemTrains || !Array.isArray(latestSystemTrains.trains)) {
+      board.data_source = "OFFLINE_NO_TRAINS";
+      board.northbound.service_note =
+        northAlerts.length > 0
+          ? northAlerts[0].header_text
+          : "No train location data available offline.";
+      board.southbound.service_note =
+        southAlerts.length > 0
+          ? southAlerts[0].header_text
+          : "No train location data available offline.";
+      return board;
+    }
+
+    const trains = latestSystemTrains.trains;
 
     // 1. Project dual-direction arrivals for st
     const northTrains = [];
@@ -740,13 +902,21 @@
     board.northbound.trains = northTrains.slice(0, 8);
     board.southbound.trains = southTrains.slice(0, 8);
 
-    if (board.northbound.trains.length === 0 && st.north_label) {
-      board.northbound.service_note =
-        "No active trains currently scheduled for this platform in MTA snapshot.";
+    if (board.northbound.trains.length === 0) {
+      if (northAlerts.length > 0) {
+        board.northbound.service_note = northAlerts[0].header_text;
+      } else if (st.north_label) {
+        board.northbound.service_note =
+          "No active trains currently scheduled for this platform in MTA snapshot.";
+      }
     }
-    if (board.southbound.trains.length === 0 && st.south_label) {
-      board.southbound.service_note =
-        "No active trains currently scheduled for this platform in MTA snapshot.";
+    if (board.southbound.trains.length === 0) {
+      if (southAlerts.length > 0) {
+        board.southbound.service_note = southAlerts[0].header_text;
+      } else if (st.south_label) {
+        board.southbound.service_note =
+          "No active trains currently scheduled for this platform in MTA snapshot.";
+      }
     }
 
     // 2. Project track_map vehicles
@@ -937,6 +1107,38 @@
     }
   }
 
+  function getCalibratedNowSec() {
+    if (lastAppliedFeedTimestamp > 0 && lastSuccessfulFetchPerf > 0) {
+      return Math.floor(
+        lastAppliedFeedTimestamp + (performance.now() - lastSuccessfulFetchPerf) / 1000
+      );
+    }
+    return Math.floor(Date.now() / 1000);
+  }
+
+  async function syncAlerts() {
+    if (isSyncingAlerts) return;
+    isSyncingAlerts = true;
+    try {
+      const data = await fetchJsonWithTimeout("/api/alerts", 2500);
+      if (data && !data.offline && Array.isArray(data.alerts)) {
+        latestSystemAlerts = data;
+        if (lastAppliedFeedTimestamp === 0 && typeof data.feed_timestamp === "number" && data.feed_timestamp > 0) {
+          lastAppliedFeedTimestamp = data.feed_timestamp;
+          lastSuccessfulFetchPerf = performance.now();
+        }
+        try {
+          window.localStorage.setItem(STORAGE_KEY_ALERTS, JSON.stringify(data));
+        } catch (_) {}
+        renderCurrentStation();
+      }
+    } catch (err) {
+      console.warn("Background syncAlerts error:", err);
+    } finally {
+      isSyncingAlerts = false;
+    }
+  }
+
   function updateStalenessTicker() {
     let ageSeconds = 0;
     if (lastSuccessfulFetchPerf > 0) {
@@ -1037,6 +1239,7 @@
       reconnectDebounceTimer = setTimeout(() => {
         updateStalenessTicker();
         syncTrains();
+        syncAlerts();
       }, 350);
     };
 
@@ -1045,6 +1248,7 @@
       if (document.visibilityState === "visible") {
         updateStalenessTicker();
         syncTrains();
+        syncAlerts();
       }
     });
   }
@@ -1095,6 +1299,98 @@
           console.warn("ServiceWorker registration failed:", err);
         });
     });
+  }
+
+  function formatAlertTextWithBullets(text) {
+    if (!text) return "";
+    const escaped = escapeHtml(text);
+    return escaped.replace(/\[([A-Za-z0-9]+)\]/g, (match, routeId) => {
+      const upper = routeId.toUpperCase();
+      const isKnown = Boolean(
+        routeMap[upper] ||
+        routeMap[routeId] ||
+        (upper === "S" && routeMap["GS"]) ||
+        (upper === "SIR" && routeMap["SI"])
+      );
+      if (isKnown) {
+        const meta = getRouteMeta(upper) || getRouteMeta(routeId);
+        const bg = meta.color || "#7C858C";
+        const color = meta.text_color || "#FFFFFF";
+        const label = escapeHtml(meta.short_name || upper);
+        return `<span class="route-bullet inline" style="background-color: ${bg}; color: ${color};" title="${escapeHtml(meta.long_name || (label + ' Train'))}">${label}</span>`;
+      }
+      return match;
+    });
+  }
+
+  function renderStationAlerts(alerts, st) {
+    if (!stationAlertsContainerEl) return;
+    stationAlertsContainerEl.innerHTML = "";
+
+    if (!Array.isArray(alerts) || alerts.length === 0) {
+      stationAlertsContainerEl.classList.add("hidden");
+      return;
+    }
+
+    stationAlertsContainerEl.classList.remove("hidden");
+    const fragment = document.createDocumentFragment();
+
+    alerts.forEach((al) => {
+      const card = document.createElement("article");
+      const isUpcoming = !al.is_active_now;
+      card.className = `station-alert-card ${isUpcoming ? "upcoming" : ""}`.trim();
+
+      const header = document.createElement("div");
+      header.className = "station-alert-header";
+
+      if (Array.isArray(al.routes) && al.routes.length > 0) {
+        al.routes.forEach((r) => {
+          header.appendChild(createRouteBullet(r, "sm"));
+        });
+      }
+
+      const statusBadge = document.createElement("span");
+      if (al.is_active_now) {
+        statusBadge.className = "alert-badge active";
+        statusBadge.textContent = al.alert_type || "SERVICE ALERT";
+      } else {
+        statusBadge.className = "alert-badge upcoming";
+        statusBadge.textContent = "UPCOMING (NEXT 24H)";
+      }
+      header.appendChild(statusBadge);
+
+      if (al.direction === "N") {
+        const dirBadge = document.createElement("span");
+        dirBadge.className = "alert-badge direction";
+        dirBadge.textContent = "Northbound Only";
+        header.appendChild(dirBadge);
+      } else if (al.direction === "S") {
+        const dirBadge = document.createElement("span");
+        dirBadge.className = "alert-badge direction";
+        dirBadge.textContent = "Southbound Only";
+        header.appendChild(dirBadge);
+      }
+
+      card.appendChild(header);
+
+      if (al.header_text) {
+        const titleEl = document.createElement("h3");
+        titleEl.className = "alert-title";
+        titleEl.innerHTML = formatAlertTextWithBullets(al.header_text);
+        card.appendChild(titleEl);
+      }
+
+      if (al.description && al.description.trim() !== (al.header_text || "").trim()) {
+        const descEl = document.createElement("div");
+        descEl.className = "alert-desc";
+        descEl.innerHTML = formatAlertTextWithBullets(al.description);
+        card.appendChild(descEl);
+      }
+
+      fragment.appendChild(card);
+    });
+
+    stationAlertsContainerEl.appendChild(fragment);
   }
 
   function renderBoard(board) {
@@ -1165,6 +1461,8 @@
     lastUpdatedTextEl.textContent = isOfflineSnapshot
       ? `Cached snapshot (Offline)`
       : `Updated ${updatedTime}`;
+
+    renderStationAlerts(board.alerts || [], st);
 
     renderDirectionPanel(
       board.northbound,
@@ -1291,7 +1589,7 @@
         "No trains currently approaching this platform.";
       empty.innerHTML = `
         <div class="empty-title">No Active Trains on This Track</div>
-        <div class="empty-note">${escapeHtml(note)}</div>
+        <div class="empty-sub">${formatAlertTextWithBullets(note)}</div>
       `;
       containerEl.appendChild(empty);
       return;

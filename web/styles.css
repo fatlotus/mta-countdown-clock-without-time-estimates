@@ -462,6 +462,21 @@ body {
   font-size: 1.38rem;
 }
 
+.route-bullet.inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+  border-radius: 50%;
+  vertical-align: middle;
+  margin: 0 2px;
+  flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
 /* Recessed Architectural Corridor Switcher Bays in Vignelli Header */
 .corridor-switcher-pill {
   display: inline-flex;
@@ -977,7 +992,8 @@ a.strip-node:hover {
   color: var(--text-primary);
 }
 
-.empty-note {
+.empty-note,
+.empty-sub {
   font-size: 0.83rem;
   max-width: 440px;
   color: var(--text-secondary);
@@ -1753,6 +1769,108 @@ a.strip-node:hover {
   color: #f3f4f6;
   font-weight: 500;
   line-height: 1.4;
+}
+
+/* ==========================================================================
+   STATION SERVICE ALERTS & NOTICES (MTA Planned Work & Service Changes)
+   ========================================================================== */
+
+.station-alerts-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.station-alert-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-left: 4px solid var(--accent-amber);
+  border-radius: 6px;
+  padding: 12px 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.station-alert-card.upcoming {
+  border-left-color: var(--accent-blue);
+}
+
+.station-alert-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.alert-badge {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.alert-badge.active {
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.7);
+  color: #f59e0b;
+}
+
+.alert-badge.upcoming {
+  background: rgba(59, 130, 246, 0.18);
+  border: 1px solid rgba(59, 130, 246, 0.6);
+  color: #60a5fa;
+}
+
+.alert-badge.direction {
+  background: rgba(100, 116, 139, 0.2);
+  border: 1px solid rgba(100, 116, 139, 0.5);
+  color: var(--text-secondary);
+}
+
+.alert-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.alert-details,
+.alert-desc {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  white-space: pre-line;
+  margin-top: 4px;
+}
+
+/* Light Mode Overrides for Alerts */
+[data-theme="light"] .station-alert-card {
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
+}
+
+[data-theme="light"] .alert-badge.active {
+  background: rgba(217, 130, 0, 0.12);
+  border-color: rgba(217, 130, 0, 0.6);
+  color: #b45309;
+}
+
+[data-theme="light"] .alert-badge.upcoming {
+  background: rgba(0, 82, 176, 0.1);
+  border-color: rgba(0, 82, 176, 0.5);
+  color: #0052b0;
+}
+
+[data-theme="light"] .alert-badge.direction {
+  background: rgba(100, 116, 139, 0.12);
+  border-color: rgba(100, 116, 139, 0.4);
+  color: #334155;
 }
 
 /* Obvious Staleness (>30s): 95% Grayscale + 45% Translucent + Amber Warning Halo */

@@ -24,8 +24,9 @@ Instead of displaying arrival minute predictions, this board tells riders **wher
   - Provides deterministic corridor/line switcher buttons in the Vignelli station header and `OTHER LINES ↗` transfer chips on each station platform card in Track Map Mode (linking across multi-corridor stations and multi-platform MTA station complexes).
 - **Offline-First & "Lie-Fi" Resilient**:
   - Precomputes all 496 stations, 532 station corridors, and 80 unique local/express track diagram spines once at server startup, caching 100% of station and track topology on the client (`localStorage`, Service Worker cache, and `/mta_catalog.js`).
-  - Renders station switches, corridor changes, and track maps synchronously in `0ms` by projecting the latest cached system-wide train snapshot locally on the client.
-  - Background syncs `/api/trains` and `/api/stations` behind strict `AbortController` timeouts (`2.5s` in the Service Worker, `3.5s` in the client) with JSON schema validation so slow or captive-portal subway Wi-Fi ("lie-fi") never blocks the UI, even when `navigator.onLine === true`.
+  - Caches all active and upcoming 14-day MTA station service alerts and planned work notices (`/api/alerts`), evaluating `{ start, end }` active windows locally against calibrated monotonic time so planned reroutes published days in advance automatically surface at affected stations even when completely offline.
+  - Renders station switches, corridor changes, and track maps synchronously in `0ms` by projecting the latest cached system-wide train and alert snapshots locally on the client.
+  - Background syncs `/api/trains`, `/api/alerts`, and `/api/stations` behind strict `AbortController` timeouts (`2.5s` in the Service Worker and client) with JSON schema validation so slow or captive-portal subway Wi-Fi ("lie-fi") never blocks the UI, even when `navigator.onLine === true`.
 - **Responsive & System Theme Aware**: Automatically follows the operating system's light/dark mode (`prefers-color-scheme`) and adapts cleanly from desktop monitors down to `390px` mobile screens.
 
 ---
@@ -37,18 +38,20 @@ Instead of displaying arrival minute predictions, this board tells riders **wher
 ├── data/
 │   └── mta_static.json        # Static GTFS stations, complexes, routes, and stop sequences
 ├── internal/mta/
-│   ├── types.go               # API response, topology, and system train domain types
+│   ├── types.go               # API response, topology, alert, and system train domain types
 │   ├── topology.go            # Startup precomputation of corridors, transfers, and track spines
 │   ├── topology_test.go       # Unit tests for precomputed station corridors and track spines
+│   ├── alerts.go              # GTFS-RT subway alerts parser, 14-day window filter & station projection
+│   ├── alerts_test.go         # Unit tests for directional and station service alert projection
 │   ├── service.go             # Background GTFS-RT sync, unified train parser & board projection
 │   ├── trackmap.go            # Vehicle-to-spine track projection for Track Map mode
 │   └── service_test.go        # Unit tests for station board, track map, and corridor isolation
 ├── web/
-│   ├── index.html             # App shell, Vignelli header sign, and board/diagram containers
-│   ├── styles.css             # Responsive dark/light LCD & track diagram styling
+│   ├── index.html             # App shell, Vignelli header sign, alerts section & board/diagram containers
+│   ├── styles.css             # Responsive dark/light LCD, service alert & track diagram styling
 │   ├── sw.js                  # Two-cache Service Worker with strict lie-fi timeouts
-│   └── app.js                 # Offline-first client state, local board/track projection & background sync
-├── main.go                    # HTTP server (/api/stations, /api/trains, /api/board, /mta_catalog.js)
+│   └── app.js                 # Offline-first client state, local board/alert/track projection & sync
+├── main.go                    # HTTP server (/api/stations, /api/trains, /api/alerts, /api/board)
 └── Dockerfile                 # Multi-stage Go build for Google Cloud Run
 ```
 
